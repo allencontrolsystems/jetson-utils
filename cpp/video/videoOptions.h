@@ -102,6 +102,26 @@ public:
 	 * @note the default is true (zeroCopy CPU/GPU access enabled).
 	 */
 	bool zeroCopy;
+
+	/**
+	 * The maximum number of frames between Iframes. 0 means to use the default.
+	 */
+	uint32_t maxIFrameInterval;
+
+	/**
+	 * The SSRC value to initialize the stream with, 0 for random / unassigned
+	 */
+	uint32_t ssrc;
+
+	/**
+	 * The payload type option for the stream. 0 for default
+	 */
+	uint8_t payload_type;
+
+	/**
+	 * The `block` flag, whether or not to have the encoder block on trying to send an image
+	 */
+	bool block;
 	
 	/**
 	 * Control the number of loops for videoSource disk-based inputs (for example,
