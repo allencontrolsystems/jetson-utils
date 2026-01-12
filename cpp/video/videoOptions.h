@@ -147,6 +147,26 @@ public:
 	int latency;
 
 	/**
+	 * Whether or not to rescale the image. If this is set, output_width and output_height need to be set as well
+	 */
+	bool rescale;
+
+	/**
+	 * The width after rescaling
+	 */
+	uint32_t output_width;
+
+	/**
+	 * The height after rescaling
+	 */
+	uint32_t output_height;
+
+	/**
+	 * Some encoders need to have the image converted out of RGB before it reaches them
+	 */
+	bool input_is_rgb;
+
+	/**
 	 * Device interface types.
 	 */
 	enum DeviceType

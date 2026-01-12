@@ -314,15 +314,33 @@ bool gstEncoder::buildLaunchStr()
 		ss << " block=false";
 	}
 
-	ss << " !";
+	if( mOptions.input_is_rgb ) {
+		// This specifies that the input is RGB of the width and height
+		ss << " caps=\"video/x-raw,format=RGB";
+		ss << ",width=";
+		ss << std::to_string(mOptions.width);
+		ss << ",height=";
+		ss << std::to_string(mOptions.height);
+		ss << ",framerate=30/1\"";
+	}
 
-	if( mOptions.codecType == videoOptions::CODEC_CPU )
-    {
-		ss << "videoparse format=rgb width=" << mOptions.width 
-		<< " height=" << mOptions.height 
-		<< " framerate=" << (int)mOptions.frameRate << "/1 ! ";
-		ss << "videoconvert ! video/x-raw,format=I420 !";
-    }
+	ss << " ! ";
+
+	if ( mOptions.rescale && mOptions.output_width != 0 and mOptions.output_height != 0 ) {
+		ss << "videoconvert ! videoscale ! ";
+		ss << "video/x-raw,";
+		ss << "width=";
+		ss << std::to_string(mOptions.output_width);
+		ss << ",height=";
+		ss << std::to_string(mOptions.output_height);
+		ss << " ! ";
+	}
+
+	if ( mOptions.input_is_rgb ) {
+		// convert to the format needed by the encoder
+		ss << "videoconvert ! ";
+		ss << "video/x-raw,format=I420 ! ";
+	}
 	
 	const URI& uri = GetResource();
 	std::string encoderOptions = "";
@@ -428,7 +446,7 @@ bool gstEncoder::buildLaunchStr()
 		else if( mOptions.codec == videoOptions::CODEC_H265 )
 			ss << "rtph265pay";
 		else if( mOptions.codec == videoOptions::CODEC_VP8 )
-			ss << "rtpvp8pay";
+			ss << "rtpvp8pay picture-id-mode=15-bit";
 		else if( mOptions.codec == videoOptions::CODEC_VP9 )
 			ss << "rtpvp9pay";
 		else if( mOptions.codec == videoOptions::CODEC_MJPEG )
