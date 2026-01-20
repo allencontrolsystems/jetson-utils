@@ -44,6 +44,7 @@ videoOptions::videoOptions()
 	payload_type = 0;
 	block = true;
 	rescale = false;
+	latestOnly = false;
 	output_width = 0;
 	output_height = 0;
 	input_is_rgb = false;

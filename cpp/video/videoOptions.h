@@ -152,6 +152,11 @@ public:
 	bool rescale;
 
 	/**
+	 * Only care about the latest image, don't buffer more than one
+	 */
+	bool latestOnly;
+
+	/**
 	 * The width after rescaling
 	 */
 	uint32_t output_width;

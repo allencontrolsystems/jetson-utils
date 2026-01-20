@@ -324,6 +324,10 @@ bool gstEncoder::buildLaunchStr()
 		ss << ",framerate=30/1\"";
 	}
 
+	if (mOptions.latestOnly) {
+		ss << " ! queue max-size-buffers=1 leaky=downstream";
+	}
+
 	ss << " ! ";
 
 	if ( mOptions.rescale && mOptions.output_width != 0 and mOptions.output_height != 0 ) {
