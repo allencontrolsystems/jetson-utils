@@ -410,7 +410,12 @@ bool gstEncoder::buildLaunchStr()
 			if (mOptions.maxIFrameInterval == 0){
 				mOptions.maxIFrameInterval = 30;
 			}
+			#ifdef __aarch64__
+			ss << "iframeinterval=";
+			#else
+			ss << "byte-stream=true "; // byte stream sends SPS/PPS headers
 			ss << "key-int-max=";
+			#endif
 			ss << std::to_string(mOptions.maxIFrameInterval);
 			ss << " insert-vui=1 ";		
 		}	
@@ -418,7 +423,7 @@ bool gstEncoder::buildLaunchStr()
 	}
 
 	if( mOptions.codec == videoOptions::CODEC_H264 )
-		ss << "! video/x-h264 ! ";
+		ss << "! video/x-h264,profile=constrained-baseline,stream-format=byte-stream ! ";
 	else if( mOptions.codec == videoOptions::CODEC_H265 )
 		ss << "! video/x-h265 ! ";
 	else if( mOptions.codec == videoOptions::CODEC_VP8 )
@@ -457,7 +462,7 @@ bool gstEncoder::buildLaunchStr()
 			ss << "rtpjpegpay";
 
 		if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 ) 
-			ss << " config-interval=1";	// aggregate-mode=zero-latency";
+			ss << " config-interval=-1";	// aggregate-mode=zero-latency";
 
 		if (mOptions.payload_type != 0){
 			ss << " pt=";
