@@ -330,7 +330,7 @@ bool gstEncoder::buildLaunchStr()
 
 	ss << " ! ";
 
-	if ( mOptions.rescale && mOptions.output_width != 0 and mOptions.output_height != 0 ) {
+	if ( mOptions.codec != videoOptions::CODEC_H264 && mOptions.rescale && mOptions.output_width != 0 and mOptions.output_height != 0 ) {
 		ss << "videoconvert ! videoscale ! ";
 		ss << "video/x-raw,";
 		ss << "width=";
@@ -366,8 +366,17 @@ bool gstEncoder::buildLaunchStr()
 	}
 	
 	// the V4L2 encoders expect NVMM memory, so use nvvidconv to convert it
-	if( mOptions.codecType == videoOptions::CODEC_V4L2 && mOptions.codec != videoOptions::CODEC_MJPEG )
-		ss << "nvvidconv name=vidconv ! video/x-raw(memory:NVMM) ! ";
+	if( mOptions.codecType == videoOptions::CODEC_V4L2 && mOptions.codec != videoOptions::CODEC_MJPEG ){
+		ss << "nvvidconv name=vidconv ! video/x-raw(memory:NVMM)";
+		if (mOptions.codec == videoOptions::CODEC_H264 && mOptions.rescale && mOptions.output_width != 0 and mOptions.output_height != 0){
+			ss << ",width=";
+			ss << std::to_string(mOptions.output_width);
+			ss << ",height=";
+			ss << std::to_string(mOptions.output_height);
+		}
+
+		ss << " ! ";
+	}
 	
 	// setup the encoder and options
 	ss << encoder << " name=encoder ";
@@ -462,7 +471,7 @@ bool gstEncoder::buildLaunchStr()
 			ss << "rtpjpegpay";
 
 		if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 ) 
-			ss << " config-interval=-1";	// aggregate-mode=zero-latency";
+			ss << " config-interval=-1 aggregate-mode=1";
 
 		if (mOptions.payload_type != 0){
 			ss << " pt=";
