@@ -308,7 +308,43 @@ bool gstEncoder::buildCapsStr()
 bool gstEncoder::buildLaunchStr()
 {
 	std::ostringstream ss;
-	ss << "appsrc name=mysource is-live=true do-timestamp=true format=3 ! ";  // setup appsrc input element
+	ss << "appsrc name=mysource is-live=true do-timestamp=true format=3";  // setup appsrc input element
+
+	if( !mOptions.block){
+		ss << " block=false";
+	}
+
+	if( mOptions.input_is_rgb ) {
+		// This specifies that the input is RGB of the width and height
+		ss << " caps=\"video/x-raw,format=RGB";
+		ss << ",width=";
+		ss << std::to_string(mOptions.width);
+		ss << ",height=";
+		ss << std::to_string(mOptions.height);
+		ss << ",framerate=30/1\"";
+	}
+
+	if (mOptions.latestOnly) {
+		ss << " ! queue max-size-buffers=1 leaky=downstream";
+	}
+
+	ss << " ! ";
+
+	if ( mOptions.codec != videoOptions::CODEC_H264 && mOptions.rescale && mOptions.output_width != 0 and mOptions.output_height != 0 ) {
+		ss << "videoconvert ! videoscale ! ";
+		ss << "video/x-raw,";
+		ss << "width=";
+		ss << std::to_string(mOptions.output_width);
+		ss << ",height=";
+		ss << std::to_string(mOptions.output_height);
+		ss << " ! ";
+	}
+
+	if ( mOptions.input_is_rgb ) {
+		// convert to the format needed by the encoder
+		ss << "videoconvert ! ";
+		ss << "video/x-raw,format=I420 ! ";
+	}
 	
 	const URI& uri = GetResource();
 	std::string encoderOptions = "";
@@ -330,8 +366,17 @@ bool gstEncoder::buildLaunchStr()
 	}
 	
 	// the V4L2 encoders expect NVMM memory, so use nvvidconv to convert it
-	if( mOptions.codecType == videoOptions::CODEC_V4L2 && mOptions.codec != videoOptions::CODEC_MJPEG )
-		ss << "nvvidconv name=vidconv ! video/x-raw(memory:NVMM) ! ";
+	if( mOptions.codecType == videoOptions::CODEC_V4L2 && mOptions.codec != videoOptions::CODEC_MJPEG ){
+		ss << "nvvidconv name=vidconv ! video/x-raw(memory:NVMM)";
+		if (mOptions.codec == videoOptions::CODEC_H264 && mOptions.rescale && mOptions.output_width != 0 and mOptions.output_height != 0){
+			ss << ",width=";
+			ss << std::to_string(mOptions.output_width);
+			ss << ",height=";
+			ss << std::to_string(mOptions.output_height);
+		}
+
+		ss << " ! ";
+	}
 	
 	// setup the encoder and options
 	ss << encoder << " name=encoder ";
@@ -342,9 +387,6 @@ bool gstEncoder::buildLaunchStr()
 		{
 			ss << "bitrate=" << mOptions.bitRate / 1000 << " ";	// x264enc/x265enc bitrates are in kbits
 			ss << "speed-preset=ultrafast tune=zerolatency ";
-			
-			if( mOptions.deviceType == videoOptions::DEVICE_IP )
-				ss << "key-int-max=30 insert-vui=1 ";			// send keyframes/I-frames more frequently for network streams
 		}
 		else if( mOptions.codec == videoOptions::CODEC_VP8 || mOptions.codec == videoOptions::CODEC_VP9 )
 		{
@@ -370,8 +412,27 @@ bool gstEncoder::buildLaunchStr()
 			ss << "maxperf-enable=1 ";
 	}
 
+	if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 )
+	{
+		// send keyframes/I-frames more frequently for network streams
+		if( mOptions.deviceType == videoOptions::DEVICE_IP ) {
+			if (mOptions.maxIFrameInterval == 0){
+				mOptions.maxIFrameInterval = 30;
+			}
+			#ifdef __aarch64__
+			ss << "iframeinterval=";
+			#else
+			ss << "byte-stream=true "; // byte stream sends SPS/PPS headers
+			ss << "key-int-max=";
+			#endif
+			ss << std::to_string(mOptions.maxIFrameInterval);
+			ss << " insert-vui=1 ";		
+		}	
+
+	}
+
 	if( mOptions.codec == videoOptions::CODEC_H264 )
-		ss << "! video/x-h264 ! ";
+		ss << "! video/x-h264,profile=constrained-baseline,stream-format=byte-stream ! ";
 	else if( mOptions.codec == videoOptions::CODEC_H265 )
 		ss << "! video/x-h265 ! ";
 	else if( mOptions.codec == videoOptions::CODEC_VP8 )
@@ -403,15 +464,25 @@ bool gstEncoder::buildLaunchStr()
 		else if( mOptions.codec == videoOptions::CODEC_H265 )
 			ss << "rtph265pay";
 		else if( mOptions.codec == videoOptions::CODEC_VP8 )
-			ss << "rtpvp8pay";
+			ss << "rtpvp8pay picture-id-mode=15-bit";
 		else if( mOptions.codec == videoOptions::CODEC_VP9 )
 			ss << "rtpvp9pay";
 		else if( mOptions.codec == videoOptions::CODEC_MJPEG )
 			ss << "rtpjpegpay";
 
 		if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 ) 
-			ss << " config-interval=1";	// aggregate-mode=zero-latency";
+			ss << " config-interval=-1 aggregate-mode=1";
+
+		if (mOptions.payload_type != 0){
+			ss << " pt=";
+			ss << std::to_string(mOptions.payload_type);
+		}
 		
+		if (mOptions.ssrc != 0){
+			ss << " ssrc=";
+			ss << std::to_string(mOptions.ssrc);
+		}
+
 		if( uri.protocol == "rtsp" )
 			ss << " name=pay0";	 // GstRTSPServer expects the payloaders to be named pay0, pay1, ect
 		else
@@ -462,6 +533,8 @@ bool gstEncoder::buildLaunchStr()
 		LogError(LOG_GSTREAMER "gstEncoder -- invalid protocol (%s)\n", uri.protocol.c_str());
 		return false;
 	}
+
+	ss << " sync=false";
 
 	mLaunchStr = ss.str();
 
