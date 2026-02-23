@@ -120,7 +120,8 @@ set(TENSORRT_ROOT "" CACHE PATH "Path to TensorRT SDK root")
 set(TRT_HINTS
     ${TENSORRT_ROOT}
     ${CMAKE_SOURCE_DIR}/../tensorrt  # Common if vendored
-    /opt/tensorrt-10.3              # Your specific x86 path
+    /opt/tensorrt-10.3
+	/opt/tensorrt-10.13				# support both versions of tensorrt
     /usr/lib/x86_64-linux-gnu       # Standard x86
     /usr/lib/aarch64-linux-gnu      # Standard Jetson
 )
