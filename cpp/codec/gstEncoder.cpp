@@ -171,7 +171,7 @@ bool gstEncoder::initPipeline()
 	}
 
 	// check if default framerate is needed
-	if( mOptions.frameRate <= 0 )
+	if( mOptions.frameRate < 0 )
 		mOptions.frameRate = 30;
 
 	// set default bitrate if needed
@@ -288,7 +288,7 @@ bool gstEncoder::buildCapsStr()
 	ss << ", width=" << GetWidth();
 	ss << ", height=" << GetHeight();
 	ss << ", format=(string)I420";
-	ss << ", framerate=" << (int)mOptions.frameRate << "/1";
+	ss << ", framerate=" << (int)mOptions.frameRate << "0/1";
 #else
 	ss << "video/x-raw-yuv";
 	ss << ",width=" << GetWidth();
@@ -321,7 +321,7 @@ bool gstEncoder::buildLaunchStr()
 		ss << std::to_string(mOptions.width);
 		ss << ",height=";
 		ss << std::to_string(mOptions.height);
-		ss << ",framerate=30/1\"";
+		ss << ",framerate=0/1\"";
 	}
 
 	if (mOptions.latestOnly) {
