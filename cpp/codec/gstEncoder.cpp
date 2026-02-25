@@ -171,7 +171,7 @@ bool gstEncoder::initPipeline()
 	}
 
 	// check if default framerate is needed
-	if( mOptions.frameRate <= 0 )
+	if( mOptions.frameRate < 0 )
 		mOptions.frameRate = 30;
 
 	// set default bitrate if needed
@@ -321,11 +321,11 @@ bool gstEncoder::buildLaunchStr()
 		ss << std::to_string(mOptions.width);
 		ss << ",height=";
 		ss << std::to_string(mOptions.height);
-		ss << ",framerate=30/1\"";
+		ss << ",framerate="<<std::to_string(mOptions.frameRate)<<"/1\"";
 	}
 
 	if (mOptions.latestOnly) {
-		ss << " ! queue max-size-buffers=1 leaky=downstream";
+		ss << " ! queue max-size-buffers=3 leaky=downstream";
 	}
 
 	ss << " ! ";
@@ -386,7 +386,7 @@ bool gstEncoder::buildLaunchStr()
 		if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 )
 		{
 			ss << "bitrate=" << mOptions.bitRate / 1000 << " ";	// x264enc/x265enc bitrates are in kbits
-			ss << "speed-preset=ultrafast tune=zerolatency ";
+			ss << "speed-preset=ultrafast tune=zerolatency peak-bitrate=30000000 control-rate=1 vbv-size=450000";
 		}
 		else if( mOptions.codec == videoOptions::CODEC_VP8 || mOptions.codec == videoOptions::CODEC_VP9 )
 		{
@@ -471,7 +471,7 @@ bool gstEncoder::buildLaunchStr()
 			ss << "rtpjpegpay";
 
 		if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 ) 
-			ss << " config-interval=-1 aggregate-mode=1";
+			ss << " config-interval=1 aggregate-mode=1 mtu=1400";
 
 		if (mOptions.payload_type != 0){
 			ss << " pt=";
