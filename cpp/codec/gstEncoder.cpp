@@ -386,7 +386,7 @@ bool gstEncoder::buildLaunchStr()
 		if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 )
 		{
 			ss << "bitrate=" << mOptions.bitRate / 1000 << " ";	// x264enc/x265enc bitrates are in kbits
-			ss << "speed-preset=ultrafast tune=zerolatency peak-bitrate=30000000 control-rate=1 vbv-size=450000";
+			ss << "speed-preset=ultrafast tune=zerolatency ";
 		}
 		else if( mOptions.codec == videoOptions::CODEC_VP8 || mOptions.codec == videoOptions::CODEC_VP9 )
 		{
@@ -403,7 +403,7 @@ bool gstEncoder::buildLaunchStr()
 		if( mOptions.deviceType == videoOptions::DEVICE_IP )
 		{
 			if( mOptions.codecType == videoOptions::CODEC_V4L2 )
-				ss << "insert-sps-pps=1 insert-vui=1 idrinterval=30 ";
+				ss << "insert-sps-pps=1 insert-vui=1 idrinterval=30 peak-bitrate=30000000 control-rate=1 vbv-size=450000";
 			else if( mOptions.codecType == videoOptions::CODEC_OMX )
 				ss << "insert-sps-pps=1 insert-vui=1 ";
 		}
@@ -422,7 +422,8 @@ bool gstEncoder::buildLaunchStr()
 			#ifdef __aarch64__
 			ss << "iframeinterval=";
 			#else
-			ss << "byte-stream=true "; // byte stream sends SPS/PPS headers
+		    ss << "bframes=0 ";
+			//ss << "byte-stream=true "; // byte stream sends SPS/PPS headers
 			ss << "key-int-max=";
 			#endif
 			ss << std::to_string(mOptions.maxIFrameInterval);
@@ -432,7 +433,7 @@ bool gstEncoder::buildLaunchStr()
 	}
 
 	if( mOptions.codec == videoOptions::CODEC_H264 )
-		ss << "! video/x-h264,profile=constrained-baseline,stream-format=byte-stream ! ";
+		ss << "! video/x-h264,profile=constrained-baseline ! ";
 	else if( mOptions.codec == videoOptions::CODEC_H265 )
 		ss << "! video/x-h265 ! ";
 	else if( mOptions.codec == videoOptions::CODEC_VP8 )
@@ -441,7 +442,9 @@ bool gstEncoder::buildLaunchStr()
 		ss << "! video/x-vp9 ! ";
 	else if( mOptions.codec == videoOptions::CODEC_MJPEG )
 		ss << "! image/jpeg ! ";
-	
+#ifndef __aarch64__
+    ss<<" h264parse config-interval=1 ! ";
+#endif
 	if( mOptions.save.path.length() > 0 )
 	{
 		ss << "tee name=savetee savetee. ! queue ! ";
@@ -494,7 +497,7 @@ bool gstEncoder::buildLaunchStr()
 
 			if( uri.port != 0 )
 				ss << "port=" << uri.port;
-
+            ss << " buffer-size=2000000";
 			ss << " auto-multicast=true";
 		}
 		else if( uri.protocol == "webrtc" )
