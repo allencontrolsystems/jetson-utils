@@ -403,7 +403,7 @@ bool gstEncoder::buildLaunchStr()
 		if( mOptions.deviceType == videoOptions::DEVICE_IP )
 		{
 			if( mOptions.codecType == videoOptions::CODEC_V4L2 )
-				ss << "insert-sps-pps=1 insert-vui=1 idrinterval=30 peak-bitrate=30000000 control-rate=1 vbv-size=450000";
+				ss << "insert-sps-pps=1 insert-vui=1 idrinterval=30 peak-bitrate=30000000 control-rate=1 vbv-size=450000 ";
 			else if( mOptions.codecType == videoOptions::CODEC_OMX )
 				ss << "insert-sps-pps=1 insert-vui=1 ";
 		}
