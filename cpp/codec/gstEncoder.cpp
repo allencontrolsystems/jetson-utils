@@ -432,8 +432,12 @@ bool gstEncoder::buildLaunchStr()
 
 	}
 
-	if( mOptions.codec == videoOptions::CODEC_H264 )
-		ss << "! video/x-h264,profile=constrained-baseline ! ";
+	if( mOptions.codec == videoOptions::CODEC_H264 ) {
+	    ss << "! video/x-h264,profile=constrained-baseline ! ";
+#ifndef __aarch64__
+	    ss<<" h264parse config-interval=1 ! ";
+#endif
+	}
 	else if( mOptions.codec == videoOptions::CODEC_H265 )
 		ss << "! video/x-h265 ! ";
 	else if( mOptions.codec == videoOptions::CODEC_VP8 )
@@ -442,9 +446,7 @@ bool gstEncoder::buildLaunchStr()
 		ss << "! video/x-vp9 ! ";
 	else if( mOptions.codec == videoOptions::CODEC_MJPEG )
 		ss << "! image/jpeg ! ";
-#ifndef __aarch64__
-    ss<<" h264parse config-interval=1 ! ";
-#endif
+
 	if( mOptions.save.path.length() > 0 )
 	{
 		ss << "tee name=savetee savetee. ! queue ! ";
