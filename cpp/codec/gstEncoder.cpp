@@ -423,7 +423,6 @@ bool gstEncoder::buildLaunchStr()
 			ss << "iframeinterval=";
 			#else
 		    ss << "bframes=0 ";
-			//ss << "byte-stream=true "; // byte stream sends SPS/PPS headers
 			ss << "key-int-max=";
 			#endif
 			ss << std::to_string(mOptions.maxIFrameInterval);
