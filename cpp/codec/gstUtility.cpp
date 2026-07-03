@@ -569,7 +569,20 @@ const char* gst_select_encoder( videoOptions::Codec codec, videoOptions::CodecTy
 	
 	if( codec == videoOptions::CODEC_RAW )
 		type = videoOptions::CODEC_CPU;
-	
+
+#if defined(__x86_64__) || defined(__amd64__)
+	// Desktop NVENC opt-in (GUNCAM_NVENC=1). jetson-utils has no native NVENC path (see the
+	// CODEC_NVENC TODO above), but the GStreamer nvcodec plugin's nvh264enc encodes on the GPU's
+	// dedicated ENC engine (off the SM and CPU). It accepts system-memory I420 and uploads to NVENC
+	// internally, so it drops in where x264enc would go with no pipeline-memory changes.
+	if( codec == videoOptions::CODEC_H264 )
+	{
+		const char* nvenc_env = getenv("GUNCAM_NVENC");
+		if( nvenc_env && nvenc_env[0] == '1' )
+			return "nvh264enc";
+	}
+#endif
+
 	if( type == videoOptions::CODEC_CPU )
 	{
 		switch(codec)
