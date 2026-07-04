@@ -575,6 +575,7 @@ const char* gst_select_encoder( videoOptions::Codec codec, videoOptions::CodecTy
 	// CODEC_NVENC TODO above), but the GStreamer nvcodec plugin's nvh264enc encodes on the GPU's
 	// dedicated ENC engine (off the SM and CPU). It accepts system-memory I420 and uploads to NVENC
 	// internally, so it drops in where x264enc would go with no pipeline-memory changes.
+	// Opt-in only: default stays software x264enc so CI / non-NVENC environments are unaffected.
 	if( codec == videoOptions::CODEC_H264 )
 	{
 		const char* nvenc_env = getenv("GUNCAM_NVENC");
