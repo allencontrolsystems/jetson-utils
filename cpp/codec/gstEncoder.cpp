@@ -380,8 +380,15 @@ bool gstEncoder::buildLaunchStr()
 	
 	// setup the encoder and options
 	ss << encoder << " name=encoder ";
-	
-	if( mOptions.codecType == videoOptions::CODEC_CPU )
+
+	if( strncmp(encoder, "nvh264enc", 9) == 0 )
+	{
+		// desktop NVENC (nvcodec): bitrate is in kbit/sec (like x264enc). Only set bitrate and rely
+		// on element defaults for everything else, so the pipeline launches regardless of nvcodec
+		// plugin version (preset/rc-mode/zerolatency property names vary across versions).
+		ss << "bitrate=" << mOptions.bitRate / 1000 << " ";
+	}
+	else if( mOptions.codecType == videoOptions::CODEC_CPU )
 	{
 		if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 )
 		{
@@ -420,13 +427,13 @@ bool gstEncoder::buildLaunchStr()
 				mOptions.maxIFrameInterval = 30;
 			}
 			#ifdef __aarch64__
-			ss << "iframeinterval=";
+			ss << "iframeinterval=" << std::to_string(mOptions.maxIFrameInterval) << " insert-vui=1 ";
 			#else
-		    ss << "bframes=0 ";
-			ss << "key-int-max=";
+			if( strncmp(encoder, "nvh264enc", 9) == 0 )
+				ss << "bframes=0 gop-size=" << std::to_string(mOptions.maxIFrameInterval) << " ";  // nvcodec: gop-size, no key-int-max/insert-vui
+			else
+				ss << "bframes=0 key-int-max=" << std::to_string(mOptions.maxIFrameInterval) << " insert-vui=1 ";
 			#endif
-			ss << std::to_string(mOptions.maxIFrameInterval);
-			ss << " insert-vui=1 ";		
 		}	
 
 	}
@@ -778,15 +785,39 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 	// perform colorspace conversion
 	void* nextYUV = mBufferYUV.Next(RingBuffer::Write);
 
-	if( CUDA_FAILED(cudaConvertColor(image, format, nextYUV, IMAGE_I420, width, height, stream)) )
+#if defined(__aarch64__)
+	// Tegra: nextYUV is unified memory, so convert straight into it.
+	const bool convert_ok = !CUDA_FAILED(cudaConvertColor(image, format, nextYUV, IMAGE_I420, width, height, stream));
+#else
+	// Discrete GPU (x86): nextYUV is ZeroCopy (host-mapped) memory. Converting RGB->I420 directly
+	// into it scatters per-pixel writes across PCIe (~12ms/frame - this dominated the GPU). Instead
+	// convert into a device buffer (coalesced device writes, sub-ms) then do a single bulk D2H copy
+	// into the host push buffer. thread_local: each stream's Render runs on its own dedicated thread,
+	// so the per-thread device buffer avoids any cross-encoder race.
+	bool convert_ok = false;
+	{
+		thread_local void* s_dev_i420 = nullptr;
+		thread_local size_t s_dev_size = 0;
+		if( s_dev_size < i420Size )
+		{
+			if( s_dev_i420 ) cudaFree(s_dev_i420);
+			if( CUDA_FAILED(cudaMalloc(&s_dev_i420, i420Size)) ) { s_dev_i420 = nullptr; s_dev_size = 0; }
+			else s_dev_size = i420Size;
+		}
+		if( s_dev_i420 && !CUDA_FAILED(cudaConvertColor(image, format, s_dev_i420, IMAGE_I420, width, height, stream)) )
+			convert_ok = !CUDA_FAILED(cudaMemcpyAsync(nextYUV, s_dev_i420, i420Size, cudaMemcpyDeviceToHost, stream));
+	}
+#endif
+
+	if( !convert_ok )
 	{
 		LogError(LOG_GSTREAMER "gstEncoder::Render() -- unsupported image format (%s)\n", imageFormatToStr(format));
 		LogError(LOG_GSTREAMER "                        supported formats are:\n");
-		LogError(LOG_GSTREAMER "                            * rgb8\n");		
-		LogError(LOG_GSTREAMER "                            * rgba8\n");		
-		LogError(LOG_GSTREAMER "                            * rgb32f\n");		
+		LogError(LOG_GSTREAMER "                            * rgb8\n");
+		LogError(LOG_GSTREAMER "                            * rgba8\n");
+		LogError(LOG_GSTREAMER "                            * rgb32f\n");
 		LogError(LOG_GSTREAMER "                            * rgba32f\n");
-		
+
 		enc_success = false;
 		render_end();
 	}
