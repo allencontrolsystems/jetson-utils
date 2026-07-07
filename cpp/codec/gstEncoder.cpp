@@ -33,14 +33,14 @@
 #include "cudaColorspace.h"
 
 #define GST_USE_UNSTABLE_API
-#include <gst/webrtc/webrtc.h>
 #include <gst/app/gstappsrc.h>
-
-#include <sstream>
+#include <gst/webrtc/webrtc.h>
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
 
+#include <boost/beast/websocket/stream.hpp>
+#include <sstream>
 
 // supported video file extensions
 const char* gstEncoder::SupportedExtensions[] = { "mkv", "mp4", "qt", 
@@ -643,9 +643,8 @@ bool gstEncoder::encodeYUV( void* buffer, size_t size )
 			gst_buffer_unref(gstBuffer);
 			return false;
 		}
-		
 		memcpy(map.data, buffer, size);
-		gst_buffer_unmap(gstBuffer, &map); 
+		gst_buffer_unmap(gstBuffer, &map);
 	} 
 	else
 	{
@@ -774,8 +773,11 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 
 	// allocate color conversion buffer
 	const size_t i420Size = imageFormatSize(IMAGE_I420, width, height);
-
+#if defined(__aarch64__)
 	if( !mBufferYUV.Alloc(2, i420Size, RingBuffer::ZeroCopy) )
+#else
+    if( !mBufferYUV.Alloc(2, i420Size, RingBuffer::Threaded) )
+#endif
 	{
 		LogError(LOG_GSTREAMER "gstEncoder -- failed to allocate buffers (%zu bytes each)\n", i420Size);
 		enc_success = false;
