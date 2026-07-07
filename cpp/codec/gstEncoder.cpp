@@ -773,11 +773,10 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 
 	// allocate color conversion buffer
 	const size_t i420Size = imageFormatSize(IMAGE_I420, width, height);
-#if defined(__aarch64__)
+	// nextYUV must be host-mapped (ZeroCopy): the x86 convert path bulk-copies I420 D->H
+	// into it and encodeYUV() memcpy's from it on the CPU. RingBuffer::Threaded (no ZeroCopy)
+	// allocates device-only memory (cudaMalloc), which makes that CPU memcpy segfault.
 	if( !mBufferYUV.Alloc(2, i420Size, RingBuffer::ZeroCopy) )
-#else
-    if( !mBufferYUV.Alloc(2, i420Size, RingBuffer::Threaded) )
-#endif
 	{
 		LogError(LOG_GSTREAMER "gstEncoder -- failed to allocate buffers (%zu bytes each)\n", i420Size);
 		enc_success = false;
