@@ -39,7 +39,6 @@
 #include <strings.h>
 #include <unistd.h>
 
-#include <boost/beast/websocket/stream.hpp>
 #include <sstream>
 
 // supported video file extensions
@@ -83,7 +82,9 @@ gstEncoder::gstEncoder( const videoOptions& options ) : videoOutput(options)
 	mBufferYUV.SetThreaded(false);
 
 	for( uint32_t n=0; n < YUVBufferCount; n++ )
+	{
 		mBufferBusy[n].store(false);
+	}
 }
 
 
