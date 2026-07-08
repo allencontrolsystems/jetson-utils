@@ -816,10 +816,8 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 	// With YUVBufferCount slots >> pipeline depth this is essentially never hit, but if it
 	// is, skip this frame rather than corrupt an in-flight buffer.
 	if( mBufferBusy[yuvSlot].load() )
-	{
-		if( mOptions.frameCount % 25 == 0 )
-			LogVerbose(LOG_GSTREAMER "gstEncoder -- all YUV push buffers in flight, skipping frame %zu\n", mOptions.frameCount);
-
+	{		
+		LogDebug(LOG_GSTREAMER "gstEncoder -- all YUV push buffers in flight, skipping frame %zu\n", mOptions.frameCount);
 		enc_success = true;
 		render_end();
 	}
