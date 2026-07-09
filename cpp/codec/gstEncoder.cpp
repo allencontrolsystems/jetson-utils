@@ -33,14 +33,13 @@
 #include "cudaColorspace.h"
 
 #define GST_USE_UNSTABLE_API
-#include <gst/webrtc/webrtc.h>
 #include <gst/app/gstappsrc.h>
-
-#include <sstream>
+#include <gst/webrtc/webrtc.h>
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
 
+#include <sstream>
 
 // supported video file extensions
 const char* gstEncoder::SupportedExtensions[] = { "mkv", "mp4", "qt", 
@@ -81,6 +80,11 @@ gstEncoder::gstEncoder( const videoOptions& options ) : videoOutput(options)
 	mNeedData     = false;
 
 	mBufferYUV.SetThreaded(false);
+
+	for( uint32_t n=0; n < YUVBufferCount; n++ )
+	{
+		mBufferBusy[n].store(false);
+	}
 }
 
 
@@ -582,8 +586,31 @@ void gstEncoder::onEnoughData( GstElement* pipeline, gpointer user_data )
 }
 
 
+// context handed to a wrapped GstBuffer's release callback
+struct gstYUVBufferRef
+{
+	gstEncoder* encoder;
+	int         slot;
+};
+
+
+// onBufferReleased
+void gstEncoder::onBufferReleased( void* user_data )
+{
+	gstYUVBufferRef* ref = (gstYUVBufferRef*)user_data;
+
+	if( !ref )
+		return;
+
+	if( ref->encoder != NULL && ref->slot >= 0 && ref->slot < (int)YUVBufferCount )
+		ref->encoder->mBufferBusy[ref->slot].store(false);
+
+	delete ref;
+}
+
+
 // encodeYUV
-bool gstEncoder::encodeYUV( void* buffer, size_t size )
+bool gstEncoder::encodeYUV( void* buffer, size_t size, int slot )
 {
 	if( !buffer || size == 0 )
 		return false;
@@ -629,33 +656,29 @@ bool gstEncoder::encodeYUV( void* buffer, size_t size )
 	}
 
 #if GST_CHECK_VERSION(1,0,0)
-	// allocate gstreamer buffer memory
-	GstBuffer* gstBuffer = gst_buffer_new_allocate(NULL, size, NULL);
-	
-	// map the buffer for write access
-	GstMapInfo map; 
+	// Wrap the ring-buffer slot directly into a GstBuffer instead of allocating a new
+	// buffer and memcpy'ing into it. The slot's memory is CUDA-accessible (ZeroCopy) and
+	// already holds this frame's I420 data (converted into it on Tegra, D2H-copied into it
+	// on discrete GPUs). The slot's busy flag is held until GStreamer frees the buffer
+	// (onBufferReleased), so Render() won't overwrite a slot still in flight downstream.
+	if( slot >= 0 && slot < (int)YUVBufferCount )
+		mBufferBusy[slot].store(true);
 
-	if( gst_buffer_map(gstBuffer, &map, GST_MAP_WRITE) ) 
-	{ 
-		if( map.size != size )
-		{
-			LogError(LOG_GSTREAMER "gstEncoder -- gst_buffer_map() size mismatch, got %zu bytes, expected %zu bytes\n", map.size, size);
-			gst_buffer_unref(gstBuffer);
-			return false;
-		}
-		
-		memcpy(map.data, buffer, size);
-		gst_buffer_unmap(gstBuffer, &map); 
-	} 
-	else
+	gstYUVBufferRef* bufferRef = new gstYUVBufferRef{ this, slot };
+
+	GstBuffer* gstBuffer = gst_buffer_new_wrapped_full(GST_MEMORY_FLAG_READONLY, buffer, size, 0, size, bufferRef, onBufferReleased);
+
+	if( !gstBuffer )
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- failed to map gstreamer buffer memory (%zu bytes)\n", size);
-		gst_buffer_unref(gstBuffer);
+		LogError(LOG_GSTREAMER "gstEncoder -- failed to wrap gstreamer buffer memory (%zu bytes)\n", size);
+		onBufferReleased(bufferRef);	// clears the busy flag and frees the ref
 		return false;
 	}
 #else
+	(void)slot;	// slot lifetime tracking only applies to the 1.0 zero-copy wrap path
+
 	// convert memory to GstBuffer
-	GstBuffer* gstBuffer = gst_buffer_new();	
+	GstBuffer* gstBuffer = gst_buffer_new();
 
 	GST_BUFFER_MALLOCDATA(gstBuffer) = (guint8*)g_malloc(size);
 	GST_BUFFER_DATA(gstBuffer) = GST_BUFFER_MALLOCDATA(gstBuffer);
@@ -774,8 +797,11 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 
 	// allocate color conversion buffer
 	const size_t i420Size = imageFormatSize(IMAGE_I420, width, height);
-
-	if( !mBufferYUV.Alloc(2, i420Size, RingBuffer::ZeroCopy) )
+	// nextYUV must be host-mapped (ZeroCopy): on Tegra the convert kernel writes I420 straight
+	// into it, on discrete GPUs the I420 image is bulk-copied D->H into it. It is then wrapped
+	// zero-copy into a GstBuffer (no host memcpy). RingBuffer::Threaded (no ZeroCopy) allocates
+	// device-only memory (cudaMalloc), which is not CPU/GStreamer-accessible.
+	if( !mBufferYUV.Alloc(YUVBufferCount, i420Size, RingBuffer::ZeroCopy) )
 	{
 		LogError(LOG_GSTREAMER "gstEncoder -- failed to allocate buffers (%zu bytes each)\n", i420Size);
 		enc_success = false;
@@ -784,6 +810,17 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 
 	// perform colorspace conversion
 	void* nextYUV = mBufferYUV.Next(RingBuffer::Write);
+	const int yuvSlot = (int)mBufferYUV.GetLatestWrite();
+
+	// don't reuse a slot that GStreamer is still holding downstream (wrapped zero-copy).
+	// With YUVBufferCount slots >> pipeline depth this is essentially never hit, but if it
+	// is, skip this frame rather than corrupt an in-flight buffer.
+	if( mBufferBusy[yuvSlot].load() )
+	{		
+		LogDebug(LOG_GSTREAMER "gstEncoder -- all YUV push buffers in flight, skipping frame %zu\n", mOptions.frameCount);
+		enc_success = true;
+		render_end();
+	}
 
 #if defined(__aarch64__)
 	// Tegra: nextYUV is unified memory, so convert straight into it.
@@ -827,8 +864,8 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
     else
 	    CUDA(cudaDeviceSynchronize());
 	
-	// encode YUV buffer
-	enc_success = encodeYUV(nextYUV, i420Size);
+	// encode YUV buffer (wrapped zero-copy from ring slot yuvSlot)
+	enc_success = encodeYUV(nextYUV, i420Size, yuvSlot);
 
 	// render sub-streams
 	render_end();	
