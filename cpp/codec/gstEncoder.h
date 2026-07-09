@@ -167,7 +167,7 @@ protected:
 	// YUV push buffers are wrapped into GstBuffers zero-copy (no host memcpy). Each slot
 	// stays "busy" until GStreamer frees the wrapped buffer, so Render() won't overwrite a
 	// slot still referenced downstream. Sized well above the pipeline's in-flight depth.
-	constexpr uint32_t YUVBufferCount = 8;
+	static const uint32_t YUVBufferCount = 8;
 	RingBuffer mBufferYUV;
 	std::atomic<bool> mBufferBusy[YUVBufferCount];
 
