@@ -97,7 +97,7 @@ public:
 	uint32_t numBuffers;
 
     /**
-     MTU for
+     MTU, can change depending on network interface support
      */
     uint16_t mtu = 1400;
 
