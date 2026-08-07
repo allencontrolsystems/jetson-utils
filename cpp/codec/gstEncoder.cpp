@@ -414,7 +414,8 @@ bool gstEncoder::buildLaunchStr()
 		if( mOptions.deviceType == videoOptions::DEVICE_IP )
 		{
 			if( mOptions.codecType == videoOptions::CODEC_V4L2 )
-				ss << "insert-sps-pps=1 insert-vui=1 idrinterval=30 peak-bitrate=30000000 control-rate=1 vbv-size=450000 ";
+                ss << "insert-sps-pps=1 insert-vui=1 idrinterval=" << mOptions.maxIFrameInterval
+                   << " peak-bitrate=30000000 control-rate=1 vbv-size=450000 ";
 			else if( mOptions.codecType == videoOptions::CODEC_OMX )
 				ss << "insert-sps-pps=1 insert-vui=1 ";
 		}
@@ -486,7 +487,7 @@ bool gstEncoder::buildLaunchStr()
 			ss << "rtpjpegpay";
 
 		if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 ) 
-			ss << " config-interval=1 aggregate-mode=1 mtu=1400";
+			ss << " config-interval=1 aggregate-mode=1 mtu="<<mOptions.mtu;
 
 		if (mOptions.payload_type != 0){
 			ss << " pt=";
