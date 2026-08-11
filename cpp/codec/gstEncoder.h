@@ -180,9 +180,9 @@ protected:
  * cleans up on destruction
 */
  struct TL_si420 {
-         void* _ptr;
-        TL_si420() : _ptr( nullptr ) {}
-        ~TL_si420() { cudaFree( _ptr ); }
+         	void* _ptr;
+		TL_si420() : _ptr( nullptr ) {}
+        	~TL_si420() { cudaFree( _ptr ); }
  };
 
 #endif
