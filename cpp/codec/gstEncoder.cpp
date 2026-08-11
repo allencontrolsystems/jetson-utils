@@ -835,41 +835,51 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 	{
 		thread_local TL_si420 s_dev_i420 ;
 		thread_local size_t s_dev_size = 0;
-		if( s_dev_size < i420Size ) {
-			if( s_dev_i420._ptr ) {
-			    cudaFree( s_dev_i420._ptr );
+		if( s_dev_size < i420Size ) 
+		{
+			if( s_dev_i420._ptr ) 
+			{
+			    cudaFree(s_dev_i420._ptr);
 			}
-			if( CUDA_FAILED( cudaMalloc( &s_dev_i420._ptr, i420Size ) ) ) {
+			if( CUDA_FAILED(cudaMalloc(&s_dev_i420._ptr, i420Size)) ) 
+			{
 			    s_dev_i420._ptr = nullptr; s_dev_size = 0;
-			} else {
+			}
+			else
+			{
 			    s_dev_size = i420Size;
 			}
 		}
-		if( s_dev_i420._ptr && !CUDA_FAILED( cudaConvertColor( image, format, s_dev_i420._ptr, IMAGE_I420, width, height, stream ) ) ) {
-		    convert_ok = !CUDA_FAILED( cudaMemcpyAsync( nextYUV, s_dev_i420._ptr, i420Size, cudaMemcpyDeviceToHost, stream ) );
+		if( s_dev_i420._ptr && !CUDA_FAILED(cudaConvertColor(image, format, s_dev_i420._ptr, IMAGE_I420, width, height, stream)) ) 
+		{
+		    convert_ok = !CUDA_FAILED(cudaMemcpyAsync(nextYUV, s_dev_i420._ptr, i420Size, cudaMemcpyDeviceToHost, stream));
 		}
 	}
 #endif
 
-	if( !convert_ok ) {
-		LogError( LOG_GSTREAMER "gstEncoder::Render() -- unsupported image format (%s)\n", imageFormatToStr( format ) );
-		LogError( LOG_GSTREAMER "                        supported formats are:\n");
-		LogError( LOG_GSTREAMER "                            * rgb8\n");
-		LogError( LOG_GSTREAMER "                            * rgba8\n");
-		LogError( LOG_GSTREAMER "                            * rgb32f\n");
-		LogError( LOG_GSTREAMER "                            * rgba32f\n");
+	if( !convert_ok ) 
+	{
+		LogError(LOG_GSTREAMER "gstEncoder::Render() -- unsupported image format (%s)\n", imageFormatToStr(format));
+		LogError(LOG_GSTREAMER "                        supported formats are:\n");
+		LogError(LOG_GSTREAMER "                            * rgb8\n");
+		LogError(LOG_GSTREAMER "                            * rgba8\n");
+		LogError(LOG_GSTREAMER "                            * rgb32f\n");
+		LogError(LOG_GSTREAMER "                            * rgba32f\n");
 
 		enc_success = false;
 		render_end();
 	}
 
-    if( stream != 0 ) {
-        CUDA( cudaStreamSynchronize( stream ) );
-    } else {
-        CUDA( cudaDeviceSynchronize() );
+    if( stream != 0 ) 
+    {
+        CUDA(cudaStreamSynchronize(stream));
+    } 
+    else 
+    {
+        CUDA(cudaDeviceSynchronize());
     }
 	// encode YUV buffer (wrapped zero-copy from ring slot yuvSlot)
-	enc_success = encodeYUV( nextYUV, i420Size, yuvSlot );
+	enc_success = encodeYUV(nextYUV, i420Size, yuvSlot);
 
 	// render sub-streams
 	render_end();	
