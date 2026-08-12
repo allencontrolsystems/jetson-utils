@@ -96,6 +96,11 @@ public:
 	 */
 	uint32_t numBuffers;
 
+    /**
+     MTU, can change depending on network interface support
+     */
+    uint16_t mtu = 1400;
+
 	/**
 	 * If true, indicates the buffers are allocated in zeroCopy memory that is mapped to
 	 * both the CPU and GPU.  Otherwise, the buffers are only accessible from the GPU.
