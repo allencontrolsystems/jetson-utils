@@ -832,29 +832,24 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 	// convert into a device buffer (coalesced device writes, sub-ms) then do a single bulk D2H copy
 	// into the host push buffer. thread_local: each stream's Render runs on its own dedicated thread,
 	// so the per-thread device buffer avoids any cross-encoder race.
-	bool convert_ok = false;
-	{
-		thread_local TL_si420 s_dev_i420 ;
-		thread_local size_t s_dev_size = 0;
-		if( s_dev_size < i420Size ) 
-		{
-			if( s_dev_i420._ptr ) 
-			{
-			    cudaFree(s_dev_i420._ptr);
-			}
-			if( CUDA_FAILED(cudaMalloc(&s_dev_i420._ptr, i420Size)) ) 
-			{
-			    s_dev_i420._ptr = nullptr; s_dev_size = 0;
-			}
-			else
-			{
-			    s_dev_size = i420Size;
-			}
-		}
-		if( s_dev_i420._ptr && !CUDA_FAILED(cudaConvertColor(image, format, s_dev_i420._ptr, IMAGE_I420, width, height, stream)) ) 
-		{
-		    convert_ok = !CUDA_FAILED(cudaMemcpyAsync(nextYUV, s_dev_i420._ptr, i420Size, cudaMemcpyDeviceToHost, stream));
-		}
+    bool convert_ok = false;
+    {
+        thread_local TL_si420 s_dev_i420;
+        thread_local size_t s_dev_size = 0;
+        if (s_dev_size < i420Size) {
+            if (s_dev_i420._ptr) {
+                cudaFree(s_dev_i420._ptr);
+            }
+            if (CUDA_FAILED(cudaMalloc(&s_dev_i420._ptr, i420Size))) {
+                s_dev_i420._ptr = nullptr;
+                s_dev_size = 0;
+            } else {
+                s_dev_size = i420Size;
+            }
+        }
+        if (s_dev_i420._ptr && !CUDA_FAILED(cudaConvertColor(image, format, s_dev_i420._ptr, IMAGE_I420, width, height, stream))) {
+            convert_ok = !CUDA_FAILED(cudaMemcpyAsync(nextYUV, s_dev_i420._ptr, i420Size, cudaMemcpyDeviceToHost, stream));
+        }
 	}
 #endif
 
