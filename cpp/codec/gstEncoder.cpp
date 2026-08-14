@@ -344,15 +344,6 @@ bool gstEncoder::buildLaunchStr()
 		ss << " ! ";
 	}
 
-	if ( mOptions.input_is_rgb ) {
-		// convert to the format needed by the encoder
-		ss << "videoconvert ! ";
-		ss << "video/x-raw,format=I420 ! ";
-	}
-	
-	const URI& uri = GetResource();
-	std::string encoderOptions = "";
-
 	// select the encoder
 	const char* encoder = gst_select_encoder(mOptions.codec, mOptions.codecType);
 	
@@ -368,7 +359,23 @@ bool gstEncoder::buildLaunchStr()
 		
 		return false;
 	}
-	
+
+	// nvcudah264enc only accepts NV12/Y444, unlike the Jetson and CPU encoders which take I420
+	const bool isDesktopNvenc = strncmp(encoder, "nvcudah264enc", 13) == 0;
+
+	if( mOptions.input_is_rgb ) {
+		// convert to the format needed by the encoder
+		ss << "videoconvert ! ";
+		// bt709 is limited range (16-235). Full range costs ~15% of the code space but only pays off if
+		// every consumer honours video_full_range_flag - ours does not, so it arrived over-contrasty
+		// with over-saturated chroma. Stated explicitly so it no longer depends on frame height.
+		ss << (isDesktopNvenc ? "video/x-raw,format=NV12,colorimetry=bt709 ! " : "video/x-raw,format=I420 ! ");
+	}
+
+	const URI& uri = GetResource();
+	std::string encoderOptions = "";
+
+
 	// the V4L2 encoders expect NVMM memory, so use nvvidconv to convert it
 	if( mOptions.codecType == videoOptions::CODEC_V4L2 && mOptions.codec != videoOptions::CODEC_MJPEG ){
 		ss << "nvvidconv name=vidconv ! video/x-raw(memory:NVMM)";
@@ -385,7 +392,7 @@ bool gstEncoder::buildLaunchStr()
 	// setup the encoder and options
 	ss << encoder << " name=encoder ";
 
-	if( strncmp(encoder, "nvh264enc", 9) == 0 )
+	if( isDesktopNvenc )
 	{
 		// desktop NVENC (nvcodec): bitrate is in kbit/sec (like x264enc). Only set bitrate and rely
 		// on element defaults for everything else, so the pipeline launches regardless of nvcodec
@@ -433,8 +440,8 @@ bool gstEncoder::buildLaunchStr()
 			#ifdef __aarch64__
 			ss << "iframeinterval=" << std::to_string(mOptions.maxIFrameInterval) << " insert-vui=1 ";
 			#else
-			if( strncmp(encoder, "nvh264enc", 9) == 0 )
-				ss << "bframes=0 gop-size=" << std::to_string(mOptions.maxIFrameInterval) << " ";  // nvcodec: gop-size, no key-int-max/insert-vui
+			if( isDesktopNvenc )
+				ss << "b-frames=0 gop-size=" << std::to_string(mOptions.maxIFrameInterval) << " ";  // nvcodec: b-frames/gop-size, no key-int-max/insert-vui
 			else
 				ss << "bframes=0 key-int-max=" << std::to_string(mOptions.maxIFrameInterval) << " insert-vui=1 ";
 			#endif
