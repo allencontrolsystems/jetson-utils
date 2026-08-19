@@ -582,7 +582,7 @@ bool gstDecoder::buildLaunchStr()
 		}
 
 		ss << "udpsrc port=" << uri.port;
-		ss << " multicast-group=" << uri.location << " auto-multicast=true";
+		//ss << " multicast-group=" << uri.location << " auto-multicast=true";
 
 		ss << " caps=\"" << "application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)";
 		
@@ -668,6 +668,9 @@ bool gstDecoder::buildLaunchStr()
 		ss << "enable-max-performance=1 ";
 	
 	ss << "! ";
+	{
+	    ss <<" videoconvert ! ";
+	}
 	
 	// resize if requested
 	if( mCustomSize || mOptions.flipMethod != videoOptions::FLIP_NONE )
