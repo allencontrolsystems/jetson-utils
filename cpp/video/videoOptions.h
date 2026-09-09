@@ -26,7 +26,9 @@
 #include "imageFormat.h"	
 #include "commandLine.h"
 
-#include "URI.h"	
+#include "URI.h"
+
+#include <vector>
 
 
 /**
@@ -175,6 +177,56 @@ public:
 	 * Some encoders need to have the image converted out of RGB before it reaches them
 	 */
 	bool input_is_rgb;
+
+	/**
+	 * A single layer of an H.264 simulcast output (see videoOptions::layers).
+	 */
+	struct SimulcastLayer
+	{
+		/**
+		 * Layer width in pixels (0 = full input resolution).
+		 * width and height must either both be 0 or both be set (to even values
+		 * no larger than the input resolution).
+		 */
+		uint32_t width = 0;
+
+		/**
+		 * Layer height in pixels (0 = full input resolution).
+		 */
+		uint32_t height = 0;
+
+		/**
+		 * Encoding bitrate for this layer in bits/sec (0 = use videoOptions::bitRate).
+		 */
+		uint32_t bitRate = 0;
+
+		/**
+		 * RTP SSRC for this layer.  0 = auto-derive as videoOptions::ssrc + layer index
+		 * (videoOptions::ssrc must then be nonzero, so the derived SSRCs are deterministic).
+		 */
+		uint32_t ssrc = 0;
+
+		/**
+		 * RTP payload type for this layer.
+		 * 0 = inherit videoOptions::payload_type (or 96 if that is also 0).
+		 */
+		uint8_t payloadType = 0;
+	};
+
+	/**
+	 * H.264 simulcast layers (encoder output streams only, rtp:// protocol only).
+	 *
+	 * When more than one layer is set, gstEncoder encodes the input once per layer
+	 * (each layer optionally downscaled) and interleaves the resulting RTP streams
+	 * onto the single UDP destination, distinguished by SSRC.  When exactly one
+	 * layer is set, its fields simply override bitRate/ssrc/payload_type and the
+	 * output resolution.  When empty (the default), simulcast is disabled.
+	 *
+	 * @note the plain UDP output carries no RTCP, so receivers cannot request
+	 *       keyframes (PLI/FIR) -- stream recovery relies entirely on the periodic
+	 *       IDR interval configured by videoOptions::maxIFrameInterval.
+	 */
+	std::vector<SimulcastLayer> layers;
 
 	/**
 	 * Device interface types.

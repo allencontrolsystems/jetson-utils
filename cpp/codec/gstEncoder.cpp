@@ -39,7 +39,17 @@
 #include <strings.h>
 #include <unistd.h>
 
+#include <cstdio>
+
 #include <sstream>
+
+// TEMP DEBUG: unconditional stderr logging for smoke-testing (remove me).
+// Bypasses the jetson-utils logger entirely so output can't be hidden by
+// log levels or stdout redirection/buffering.
+#define PROBE(fmt, ...) do { \
+	fprintf(stderr, "!!! gstEncoder.cpp:%d " fmt "\n", __LINE__, ##__VA_ARGS__); \
+	fflush(stderr); \
+} while(0)
 
 // supported video file extensions
 const char* gstEncoder::SupportedExtensions[] = { "mkv", "mp4", "qt", 
@@ -70,7 +80,12 @@ bool gstEncoder::IsSupportedExtension( const char* ext )
 
 // constructor
 gstEncoder::gstEncoder( const videoOptions& options ) : videoOutput(options)
-{	
+{
+	// TEMP DEBUG: remove me
+	PROBE("ctor: codec=%d layers=%zu input=%ux%u resource=%s",
+		 (int)options.codec, options.layers.size(),
+		 options.width, options.height, options.resource.string.c_str());
+
 	mAppSrc       = NULL;
 	mBus          = NULL;
 	mBufferCaps   = NULL;
@@ -143,7 +158,7 @@ gstEncoder* gstEncoder::Create( const videoOptions& options )
 	
 	if( !enc->init() )
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- failed to create encoder engine\n");
+		PROBE("gstEncoder -- failed to create encoder engine");
 		return NULL;
 	}
 	
@@ -170,7 +185,7 @@ bool gstEncoder::initPipeline()
 	// check for default codec
 	if( mOptions.codec == videoOptions::CODEC_UNKNOWN )
 	{
-		LogWarning(LOG_GSTREAMER "gstEncoder -- codec not specified, defaulting to H.264\n");
+		PROBE("gstEncoder -- codec not specified, defaulting to H.264");
 		mOptions.codec = videoOptions::CODEC_H264;
 	}
 
@@ -185,7 +200,7 @@ bool gstEncoder::initPipeline()
 	// build pipeline string
 	if( !buildLaunchStr() )
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- failed to build pipeline string\n");
+		PROBE("gstEncoder -- failed to build pipeline string");
 		return false;
 	}
 	
@@ -195,8 +210,8 @@ bool gstEncoder::initPipeline()
 
 	if( err != NULL )
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- failed to create pipeline\n");
-		LogError(LOG_GSTREAMER "   (%s)\n", err->message);
+		PROBE("gstEncoder -- failed to create pipeline");
+		PROBE("   (%s)", err->message);
 		g_error_free(err);
 		return false;
 	}
@@ -205,7 +220,7 @@ bool gstEncoder::initPipeline()
 
 	if( !pipeline )
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- failed to cast GstElement into GstPipeline\n");
+		PROBE("gstEncoder -- failed to cast GstElement into GstPipeline");
 		return false;
 	}	
 	
@@ -214,7 +229,7 @@ bool gstEncoder::initPipeline()
 
 	if( !mBus )
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- failed to retrieve GstBus from pipeline\n");
+		PROBE("gstEncoder -- failed to retrieve GstBus from pipeline");
 		return false;
 	}
 	
@@ -227,7 +242,7 @@ bool gstEncoder::initPipeline()
 
 	if( !appsrcElement || !appsrc )
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- failed to retrieve appsrc element from pipeline\n");
+		PROBE("gstEncoder -- failed to retrieve appsrc element from pipeline");
 		return false;
 	}
 	
@@ -246,14 +261,14 @@ bool gstEncoder::init()
 	// initialize GStreamer libraries
 	if( !gstreamerInit() )
 	{
-		LogError(LOG_GSTREAMER "failed to initialize gstreamer API\n");
+		PROBE("failed to initialize gstreamer API");
 		return false;
 	}
 
 	// create GStreamer pipeline
 	if( !initPipeline() )
 	{
-		LogError(LOG_GSTREAMER "failed to create encoder pipeline\n");
+		PROBE("failed to create encoder pipeline");
 		return false;
 	}
 
@@ -302,15 +317,269 @@ bool gstEncoder::buildCapsStr()
 #endif
 	
 	mCapsStr = ss.str();
-	LogInfo(LOG_GSTREAMER "gstEncoder -- new caps: %s\n", mCapsStr.c_str());
+	PROBE("gstEncoder -- new caps: %s", mCapsStr.c_str());
 	return true;
 }
 	
 	
 
+// gst_encoder_append_settings
+// appends the encoder element (with the given element name), its tuning properties,
+// and its output caps to the launch string.  factored out of buildLaunchStr() so the
+// simulcast path can emit one encoder per layer with a per-layer bitrate.
+static void gst_encoder_append_settings( std::ostringstream& ss, videoOptions& options, const char* encoder, uint32_t bitRate, const std::string& name )
+{
+	ss << encoder << " name=" << name << " ";
+
+	if( strncmp(encoder, "nvh264enc", 9) == 0 )
+	{
+		// desktop NVENC (nvcodec): bitrate is in kbit/sec (like x264enc). Only set bitrate and rely
+		// on element defaults for everything else, so the pipeline launches regardless of nvcodec
+		// plugin version (preset/rc-mode/zerolatency property names vary across versions).
+		ss << "bitrate=" << bitRate / 1000 << " ";
+	}
+	else if( options.codecType == videoOptions::CODEC_CPU )
+	{
+		if( options.codec == videoOptions::CODEC_H264 || options.codec == videoOptions::CODEC_H265 )
+		{
+			ss << "bitrate=" << bitRate / 1000 << " ";	// x264enc/x265enc bitrates are in kbits
+			ss << "speed-preset=ultrafast tune=zerolatency ";
+		}
+		else if( options.codec == videoOptions::CODEC_VP8 || options.codec == videoOptions::CODEC_VP9 )
+		{
+			ss << "target-bitrate=" << bitRate << " ";
+
+			if( options.deviceType == videoOptions::DEVICE_IP )
+				ss << "keyframe-max-dist=30 ";
+		}
+	}
+	else if( options.codec != videoOptions::CODEC_MJPEG )
+	{
+		ss << "bitrate=" << bitRate << " ";
+
+		if( options.deviceType == videoOptions::DEVICE_IP )
+		{
+			if( options.codecType == videoOptions::CODEC_V4L2 )
+                ss << "insert-sps-pps=1 insert-vui=1 idrinterval=" << options.maxIFrameInterval
+                   << " peak-bitrate=30000000 control-rate=1 vbv-size=450000 ";
+			else if( options.codecType == videoOptions::CODEC_OMX )
+				ss << "insert-sps-pps=1 insert-vui=1 ";
+		}
+
+		if( options.codecType == videoOptions::CODEC_V4L2 )
+			ss << "maxperf-enable=1 ";
+	}
+
+	if( options.codec == videoOptions::CODEC_H264 || options.codec == videoOptions::CODEC_H265 )
+	{
+		// send keyframes/I-frames more frequently for network streams
+		if( options.deviceType == videoOptions::DEVICE_IP ) {
+			if (options.maxIFrameInterval == 0){
+				options.maxIFrameInterval = 30;
+			}
+			#ifdef __aarch64__
+			ss << "iframeinterval=" << std::to_string(options.maxIFrameInterval) << " insert-vui=1 ";
+			#else
+			if( strncmp(encoder, "nvh264enc", 9) == 0 )
+				ss << "bframes=0 gop-size=" << std::to_string(options.maxIFrameInterval) << " ";  // nvcodec: gop-size, no key-int-max/insert-vui
+			else
+				ss << "bframes=0 key-int-max=" << std::to_string(options.maxIFrameInterval) << " insert-vui=1 ";
+			#endif
+		}
+
+	}
+
+	if( options.codec == videoOptions::CODEC_H264 ) {
+	    ss << "! video/x-h264,profile=constrained-baseline ! ";
+#ifndef __aarch64__
+	    ss<<" h264parse config-interval=1 ! ";
+#endif
+	}
+	else if( options.codec == videoOptions::CODEC_H265 )
+		ss << "! video/x-h265 ! ";
+	else if( options.codec == videoOptions::CODEC_VP8 )
+		ss << "! video/x-vp8 ! ";
+	else if( options.codec == videoOptions::CODEC_VP9 )
+		ss << "! video/x-vp9 ! ";
+	else if( options.codec == videoOptions::CODEC_MJPEG )
+		ss << "! image/jpeg ! ";
+}
+
+
+// gst_encoder_append_udpsink
+static void gst_encoder_append_udpsink( std::ostringstream& ss, const URI& uri )
+{
+	ss << "udpsink host=" << uri.location << " ";
+
+	if( uri.port != 0 )
+		ss << "port=" << uri.port;
+
+	ss << " buffer-size=2000000";
+	ss << " auto-multicast=true";
+}
+
+
+// gst_encoder_validate_simulcast
+static bool gst_encoder_validate_simulcast( const videoOptions& options, const URI& uri )
+{
+	const size_t numLayers = options.layers.size();
+
+	if( uri.protocol != "rtp" )
+	{
+		PROBE("gstEncoder -- simulcast output requires the rtp:// protocol (got '%s')", uri.protocol.c_str());
+		return false;
+	}
+
+	for( size_t i=0; i < numLayers; i++ )
+	{
+		const videoOptions::SimulcastLayer& layer = options.layers[i];
+
+		if( (layer.width == 0) != (layer.height == 0) )
+		{
+			PROBE("gstEncoder -- simulcast layer %zu: width and height must both be set, or both be 0 for full input resolution", i);
+			return false;
+		}
+
+		if( (layer.width % 2) != 0 || (layer.height % 2) != 0 )
+		{
+			PROBE("gstEncoder -- simulcast layer %zu: width and height must be even (got %ux%u)", i, layer.width, layer.height);
+			return false;
+		}
+
+		if( (options.width != 0 && layer.width > options.width) || (options.height != 0 && layer.height > options.height) )
+		{
+			PROBE("gstEncoder -- simulcast layer %zu: resolution %ux%u exceeds the input resolution %ux%u", i, layer.width, layer.height, options.width, options.height);
+			return false;
+		}
+
+		if( layer.ssrc == 0 && options.ssrc == 0 )
+		{
+			PROBE("gstEncoder -- simulcast layer %zu: no SSRC and no base SSRC to derive one from (set videoOptions::ssrc or a per-layer ssrc)", i);
+			return false;
+		}
+	}
+
+	// effective SSRCs (explicit, or auto-derived as base SSRC + layer index) must be unique
+	for( size_t i=0; i < numLayers; i++ )
+	{
+		const uint32_t ssrc_i = options.layers[i].ssrc != 0 ? options.layers[i].ssrc : options.ssrc + (uint32_t)i;
+
+		for( size_t j=i+1; j < numLayers; j++ )
+		{
+			const uint32_t ssrc_j = options.layers[j].ssrc != 0 ? options.layers[j].ssrc : options.ssrc + (uint32_t)j;
+
+			if( ssrc_i == ssrc_j )
+			{
+				PROBE("gstEncoder -- simulcast layers %zu and %zu have the same effective SSRC (%u)", i, j, ssrc_i);
+				return false;
+			}
+		}
+	}
+
+	if( options.rescale )
+		PROBE("gstEncoder -- videoOptions::rescale is ignored in simulcast mode (use per-layer width/height instead)");
+
+	if( options.save.path.length() > 0 )
+		PROBE("gstEncoder -- videoOptions::save is ignored in simulcast mode");
+
+	return true;
+}
+
+
+// gst_encoder_build_simulcast
+// builds the tail of the launch string for a multi-layer H.264 simulcast pipeline:
+//
+//   <input> ! <upload to GPU memory> ! tee name=simulcasttee
+//     simulcasttee. ! queue ! <scale to layer 0> ! <encoder> ! rtph264pay ssrc=S0 ! f.
+//     simulcasttee. ! queue ! <scale to layer 1> ! <encoder> ! rtph264pay ssrc=S1 ! f.
+//     ...
+//   funnel name=f ! udpsink ...
+//
+// all layers are interleaved onto the single UDP destination, and receivers tell
+// them apart by SSRC.  note that plain udpsink carries no RTCP, so receivers cannot
+// request keyframes (PLI/FIR) -- stream recovery relies entirely on the periodic
+// IDR interval (videoOptions::maxIFrameInterval).
+static bool gst_encoder_build_simulcast( std::ostringstream& ss, videoOptions& options, const URI& uri, const char* encoder )
+{
+	if( !gst_encoder_validate_simulcast(options, uri) )
+		return false;
+
+#ifdef __aarch64__
+	if( options.codecType != videoOptions::CODEC_V4L2 )
+	{
+		PROBE("gstEncoder -- simulcast on Jetson requires the V4L2 hardware encoder (%s selected)", videoOptions::CodecTypeToStr(options.codecType));
+		return false;
+	}
+
+	// upload to NVMM once, then each branch downscales on the VIC with its own nvvidconv
+	ss << "nvvidconv name=vidconv ! video/x-raw(memory:NVMM) ! tee name=simulcasttee ";
+#else
+	// on x86, simulcast always uses NVENC (nvh264enc) regardless of GUNCAM_NVENC --
+	// several parallel x264enc instances are too CPU-heavy, and cudascale's
+	// CUDA-memory output feeds nvh264enc directly.
+	if( strncmp(encoder, "nvh264enc", 9) != 0 )
+	{
+		PROBE("gstEncoder -- simulcast on x86 requires NVENC, overriding encoder '%s' with nvh264enc", encoder);
+		encoder = "nvh264enc";
+	}
+
+	// upload to CUDA memory once, then each branch downscales on the GPU with cudascale
+	ss << "cudaupload ! video/x-raw(memory:CUDAMemory) ! tee name=simulcasttee ";
+#endif
+
+	// normalize the IDR interval up front so every layer gets the same GOP settings
+	// (gst_encoder_append_settings otherwise defaults it to 30 partway through the build)
+	if( options.deviceType == videoOptions::DEVICE_IP && options.maxIFrameInterval == 0 )
+		options.maxIFrameInterval = 30;
+
+	const size_t numLayers = options.layers.size();
+
+	for( size_t i=0; i < numLayers; i++ )
+	{
+		const videoOptions::SimulcastLayer& layer = options.layers[i];
+
+		const uint32_t bitRate = layer.bitRate != 0 ? layer.bitRate : options.bitRate;
+		const uint32_t ssrc    = layer.ssrc != 0 ? layer.ssrc : options.ssrc + (uint32_t)i;	// auto-derive from the base SSRC
+
+		ss << "simulcasttee. ! queue ! ";
+
+	#ifdef __aarch64__
+		ss << "nvvidconv ! video/x-raw(memory:NVMM)";
+	#else
+		ss << "cudascale ! video/x-raw(memory:CUDAMemory)";
+	#endif
+
+		if( layer.width != 0 && layer.height != 0 )
+			ss << ",width=" << layer.width << ",height=" << layer.height;
+
+		ss << " ! ";
+
+		gst_encoder_append_settings(ss, options, encoder, bitRate, "encoder" + std::to_string(i));
+
+		// payload type: per-layer override, else videoOptions::payload_type, else the RTP default 96
+		const uint32_t pt = layer.payloadType != 0 ? layer.payloadType
+		                  : (options.payload_type != 0 ? options.payload_type : 96);
+
+		ss << "rtph264pay name=pay_l" << i << " config-interval=1 aggregate-mode=1 mtu=" << options.mtu;
+		ss << " pt=" << pt << " ssrc=" << ssrc << " ! f. ";
+	}
+
+	ss << "funnel name=f ! ";
+	gst_encoder_append_udpsink(ss, uri);
+	ss << " sync=false";
+
+	return true;
+}
+
+
 // buildLaunchStr
 bool gstEncoder::buildLaunchStr()
 {
+	// TEMP DEBUG: remove me
+	PROBE("buildLaunchStr: layers=%zu codec=%d codecType=%d %ux%u",
+		 mOptions.layers.size(), (int)mOptions.codec, (int)mOptions.codecType,
+		 mOptions.width, mOptions.height);
+
 	std::ostringstream ss;
 	ss << "appsrc name=mysource is-live=true do-timestamp=true format=3";  // setup appsrc input element
 
@@ -351,112 +620,92 @@ bool gstEncoder::buildLaunchStr()
 	}
 	
 	const URI& uri = GetResource();
-	std::string encoderOptions = "";
 
 	// select the encoder
 	const char* encoder = gst_select_encoder(mOptions.codec, mOptions.codecType);
 	
 	if( !encoder )
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- unsupported codec requested (%s)\n", videoOptions::CodecToStr(mOptions.codec));
-		LogError(LOG_GSTREAMER "              supported encoder codecs are:\n");
-		LogError(LOG_GSTREAMER "                 * h264\n");
-		LogError(LOG_GSTREAMER "                 * h265\n");
-		LogError(LOG_GSTREAMER "                 * vp8\n");
-		LogError(LOG_GSTREAMER "                 * vp9\n");
-		LogError(LOG_GSTREAMER "                 * mjpeg\n");
-		
+		PROBE("gstEncoder -- unsupported codec requested (%s)", videoOptions::CodecToStr(mOptions.codec));
+		PROBE("              supported encoder codecs are:");
+		PROBE("                 * h264");
+		PROBE("                 * h265");
+		PROBE("                 * vp8");
+		PROBE("                 * vp9");
+		PROBE("                 * mjpeg");
+
 		return false;
 	}
-	
+
+	// simulcast (see videoOptions::layers): 2+ layers build a multi-encoder pipeline,
+	// exactly 1 layer just overrides the equivalent top-level options below
+	if( mOptions.layers.size() > 0 && mOptions.codec != videoOptions::CODEC_H264 )
+	{
+		PROBE("gstEncoder -- simulcast layers are only supported with the H264 codec (%s requested)", videoOptions::CodecToStr(mOptions.codec));
+		return false;
+	}
+
+	if( mOptions.layers.size() > 1 )
+	{
+		if( !gst_encoder_build_simulcast(ss, mOptions, uri, encoder) )
+			return false;
+
+		mLaunchStr = ss.str();
+
+		PROBE("gstEncoder -- pipeline launch string:");
+		PROBE("%s", mLaunchStr.c_str());
+
+		return true;
+	}
+
+	// effective encoder settings -- a single simulcast layer overrides these
+	uint32_t encBitRate    = mOptions.bitRate;
+	uint32_t rtpSSRC       = mOptions.ssrc;
+	uint32_t rtpPT         = mOptions.payload_type;
+	bool     rescale       = mOptions.rescale && mOptions.output_width != 0 && mOptions.output_height != 0;
+	uint32_t rescaleWidth  = mOptions.output_width;
+	uint32_t rescaleHeight = mOptions.output_height;
+
+	if( mOptions.layers.size() == 1 )
+	{
+		const videoOptions::SimulcastLayer& layer = mOptions.layers[0];
+
+		if( layer.bitRate != 0 )
+			encBitRate = layer.bitRate;
+
+		if( layer.ssrc != 0 )
+			rtpSSRC = layer.ssrc;	// otherwise auto-derive: base SSRC + layer index (== base SSRC for layer 0)
+
+		if( layer.payloadType != 0 )
+			rtpPT = layer.payloadType;	// otherwise inherit videoOptions::payload_type
+
+		if( layer.width != 0 && layer.height != 0 )
+		{
+			// H264 rescale is only implemented for the V4L2 encoder (the NVMM caps below)
+			if( mOptions.codecType != videoOptions::CODEC_V4L2 )
+				PROBE("gstEncoder -- H264 rescale requires the V4L2 encoder, the layer resolution %ux%u will be ignored", layer.width, layer.height);
+
+			rescale       = true;
+			rescaleWidth  = layer.width;
+			rescaleHeight = layer.height;
+		}
+	}
+
 	// the V4L2 encoders expect NVMM memory, so use nvvidconv to convert it
 	if( mOptions.codecType == videoOptions::CODEC_V4L2 && mOptions.codec != videoOptions::CODEC_MJPEG ){
 		ss << "nvvidconv name=vidconv ! video/x-raw(memory:NVMM)";
-		if (mOptions.codec == videoOptions::CODEC_H264 && mOptions.rescale && mOptions.output_width != 0 and mOptions.output_height != 0){
+		if (mOptions.codec == videoOptions::CODEC_H264 && rescale){
 			ss << ",width=";
-			ss << std::to_string(mOptions.output_width);
+			ss << std::to_string(rescaleWidth);
 			ss << ",height=";
-			ss << std::to_string(mOptions.output_height);
+			ss << std::to_string(rescaleHeight);
 		}
 
 		ss << " ! ";
 	}
-	
+
 	// setup the encoder and options
-	ss << encoder << " name=encoder ";
-
-	if( strncmp(encoder, "nvh264enc", 9) == 0 )
-	{
-		// desktop NVENC (nvcodec): bitrate is in kbit/sec (like x264enc). Only set bitrate and rely
-		// on element defaults for everything else, so the pipeline launches regardless of nvcodec
-		// plugin version (preset/rc-mode/zerolatency property names vary across versions).
-		ss << "bitrate=" << mOptions.bitRate / 1000 << " ";
-	}
-	else if( mOptions.codecType == videoOptions::CODEC_CPU )
-	{
-		if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 )
-		{
-			ss << "bitrate=" << mOptions.bitRate / 1000 << " ";	// x264enc/x265enc bitrates are in kbits
-			ss << "speed-preset=ultrafast tune=zerolatency ";
-		}
-		else if( mOptions.codec == videoOptions::CODEC_VP8 || mOptions.codec == videoOptions::CODEC_VP9 )
-		{
-			ss << "target-bitrate=" << mOptions.bitRate << " ";
-			
-			if( mOptions.deviceType == videoOptions::DEVICE_IP )
-				ss << "keyframe-max-dist=30 ";
-		}
-	}
-	else if( mOptions.codec != videoOptions::CODEC_MJPEG )
-	{
-		ss << "bitrate=" << mOptions.bitRate << " ";
-		
-		if( mOptions.deviceType == videoOptions::DEVICE_IP )
-		{
-			if( mOptions.codecType == videoOptions::CODEC_V4L2 )
-                ss << "insert-sps-pps=1 insert-vui=1 idrinterval=" << mOptions.maxIFrameInterval
-                   << " peak-bitrate=30000000 control-rate=1 vbv-size=450000 ";
-			else if( mOptions.codecType == videoOptions::CODEC_OMX )
-				ss << "insert-sps-pps=1 insert-vui=1 ";
-		}
-		
-		if( mOptions.codecType == videoOptions::CODEC_V4L2 )
-			ss << "maxperf-enable=1 ";
-	}
-
-	if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 )
-	{
-		// send keyframes/I-frames more frequently for network streams
-		if( mOptions.deviceType == videoOptions::DEVICE_IP ) {
-			if (mOptions.maxIFrameInterval == 0){
-				mOptions.maxIFrameInterval = 30;
-			}
-			#ifdef __aarch64__
-			ss << "iframeinterval=" << std::to_string(mOptions.maxIFrameInterval) << " insert-vui=1 ";
-			#else
-			if( strncmp(encoder, "nvh264enc", 9) == 0 )
-				ss << "bframes=0 gop-size=" << std::to_string(mOptions.maxIFrameInterval) << " ";  // nvcodec: gop-size, no key-int-max/insert-vui
-			else
-				ss << "bframes=0 key-int-max=" << std::to_string(mOptions.maxIFrameInterval) << " insert-vui=1 ";
-			#endif
-		}	
-
-	}
-
-	if( mOptions.codec == videoOptions::CODEC_H264 ) {
-	    ss << "! video/x-h264,profile=constrained-baseline ! ";
-#ifndef __aarch64__
-	    ss<<" h264parse config-interval=1 ! ";
-#endif
-	}
-	else if( mOptions.codec == videoOptions::CODEC_H265 )
-		ss << "! video/x-h265 ! ";
-	else if( mOptions.codec == videoOptions::CODEC_VP8 )
-		ss << "! video/x-vp8 ! ";
-	else if( mOptions.codec == videoOptions::CODEC_VP9 )
-		ss << "! video/x-vp9 ! ";
-	else if( mOptions.codec == videoOptions::CODEC_MJPEG )
-		ss << "! image/jpeg ! ";
+	gst_encoder_append_settings(ss, mOptions, encoder, encBitRate, "encoder");
 
 	if( mOptions.save.path.length() > 0 )
 	{
@@ -489,14 +738,14 @@ bool gstEncoder::buildLaunchStr()
 		if( mOptions.codec == videoOptions::CODEC_H264 || mOptions.codec == videoOptions::CODEC_H265 ) 
 			ss << " config-interval=1 aggregate-mode=1 mtu="<<mOptions.mtu;
 
-		if (mOptions.payload_type != 0){
+		if (rtpPT != 0){
 			ss << " pt=";
-			ss << std::to_string(mOptions.payload_type);
+			ss << std::to_string(rtpPT);
 		}
-		
-		if (mOptions.ssrc != 0){
+
+		if (rtpSSRC != 0){
 			ss << " ssrc=";
-			ss << std::to_string(mOptions.ssrc);
+			ss << std::to_string(rtpSSRC);
 		}
 
 		if( uri.protocol == "rtsp" )
@@ -506,12 +755,7 @@ bool gstEncoder::buildLaunchStr()
 		
 		if( uri.protocol == "rtp" )
 		{
-			ss << "udpsink host=" << uri.location << " ";
-
-			if( uri.port != 0 )
-				ss << "port=" << uri.port;
-            ss << " buffer-size=2000000";
-			ss << " auto-multicast=true";
+			gst_encoder_append_udpsink(ss, uri);
 		}
 		else if( uri.protocol == "webrtc" )
 		{
@@ -528,7 +772,7 @@ bool gstEncoder::buildLaunchStr()
 			ss << "h265parse config-interval=1 ! mpegtsmux ! rtpmp2tpay ! udpsink host=";
 		else
 		{
-			LogError(LOG_GSTREAMER "gstEncoder -- rtpmp2ts output only supports h264 and h265. Unsupported codec (%s)\n", uri.extension.c_str());
+			PROBE("gstEncoder -- rtpmp2ts output only supports h264 and h265. Unsupported codec (%s)", uri.extension.c_str());
 			return false;
 		}
  		
@@ -546,7 +790,7 @@ bool gstEncoder::buildLaunchStr()
 	}
 	else
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- invalid protocol (%s)\n", uri.protocol.c_str());
+		PROBE("gstEncoder -- invalid protocol (%s)", uri.protocol.c_str());
 		return false;
 	}
 
@@ -554,8 +798,8 @@ bool gstEncoder::buildLaunchStr()
 
 	mLaunchStr = ss.str();
 
-	LogInfo(LOG_GSTREAMER "gstEncoder -- pipeline launch string:\n");
-	LogInfo(LOG_GSTREAMER "%s\n", mLaunchStr.c_str());
+	PROBE("gstEncoder -- pipeline launch string:");
+	PROBE("%s", mLaunchStr.c_str());
 
 	return true;
 }
@@ -577,7 +821,7 @@ void gstEncoder::onNeedData( GstElement* pipeline, guint size, gpointer user_dat
 // onEnoughData
 void gstEncoder::onEnoughData( GstElement* pipeline, gpointer user_data )
 {
-	LogDebug(LOG_GSTREAMER "gstEncoder -- appsrc signalling enough data\n");
+	PROBE("gstEncoder -- appsrc signalling enough data");
 
 	if( !user_data )
 		return;
@@ -628,7 +872,7 @@ bool gstEncoder::encodeYUV( void* buffer, size_t size, int slot )
 	/*if( !mNeedData )
 	{
 		if( mOptions.frameCount % 25 == 0 )
-			LogVerbose(LOG_GSTREAMER "gstEncoder -- pipeline full, skipping frame %zu (%ux%u, %zu bytes)\n", mOptions.frameCount, mOptions.width, mOptions.height, size);
+			PROBE("gstEncoder -- pipeline full, skipping frame %zu (%ux%u, %zu bytes)", mOptions.frameCount, mOptions.width, mOptions.height, size);
 		
 		return true;
 	}*/
@@ -638,7 +882,7 @@ bool gstEncoder::encodeYUV( void* buffer, size_t size, int slot )
 	{
 		if( !buildCapsStr() )
 		{
-			LogError(LOG_GSTREAMER "gstEncoder -- failed to build caps string\n");
+			PROBE("gstEncoder -- failed to build caps string");
 			return false;
 		}
 
@@ -646,8 +890,8 @@ bool gstEncoder::encodeYUV( void* buffer, size_t size, int slot )
 
 		if( !mBufferCaps )
 		{
-			LogError(LOG_GSTREAMER "gstEncoder -- failed to parse caps from string:\n");
-			LogError(LOG_GSTREAMER "   %s\n", mCapsStr.c_str());
+			PROBE("gstEncoder -- failed to parse caps from string:");
+			PROBE("   %s", mCapsStr.c_str());
 			return false;
 		}
 
@@ -671,7 +915,7 @@ bool gstEncoder::encodeYUV( void* buffer, size_t size, int slot )
 
 	if( !gstBuffer )
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- failed to wrap gstreamer buffer memory (%zu bytes)\n", size);
+		PROBE("gstEncoder -- failed to wrap gstreamer buffer memory (%zu bytes)", size);
 		onBufferReleased(bufferRef);	// clears the busy flag and frees the ref
 		return false;
 	}
@@ -707,7 +951,7 @@ bool gstEncoder::encodeYUV( void* buffer, size_t size, int slot )
 			break;
 		}
 		
-		LogError(LOG_GSTREAMER "gstEncoder -- an error occurred pushing appsrc buffer (result=%i '%s')\n", (int)ret, gst_flow_get_name(ret));
+		PROBE("gstEncoder -- an error occurred pushing appsrc buffer (result=%i '%s')", (int)ret, gst_flow_get_name(ret));
 		
 		// check to make sure the pipeline is still playing (some pipelines like RTSP server may disconnect)
 		GstState state = GST_STATE_VOID_PENDING;
@@ -715,7 +959,7 @@ bool gstEncoder::encodeYUV( void* buffer, size_t size, int slot )
 	
 		if( state != GST_STATE_PLAYING )
 		{
-			LogError(LOG_GSTREAMER "gstEncoder -- pipeline is in the '%s' state, restarting pipeline...\n", gst_element_state_get_name(state));
+			PROBE("gstEncoder -- pipeline is in the '%s' state, restarting pipeline...", gst_element_state_get_name(state));
 			
 			mStreaming = false;
 			
@@ -749,7 +993,7 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 	if( mOptions.width != width || mOptions.height != height )
 	{
 		if( mOptions.width != 0 || mOptions.height != 0 )
-			LogWarning(LOG_GSTREAMER "gstEncoder -- resolution changing from (%ux%u) to (%ux%u)\n", mOptions.width, mOptions.height, width, height);
+			PROBE("gstEncoder -- resolution changing from (%ux%u) to (%ux%u)", mOptions.width, mOptions.height, width, height);
 		
 		mOptions.width  = width;
 		mOptions.height = height;
@@ -765,7 +1009,7 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 			
 			if( !initPipeline() || !Open() )
 			{
-				LogError(LOG_GSTREAMER "failed to re-initialize encoder with new dimensions (%ux%u)\n", width, height);
+				PROBE("failed to re-initialize encoder with new dimensions (%ux%u)", width, height);
 				return false;
 			}
 		}
@@ -804,7 +1048,7 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 	// device-only memory (cudaMalloc), which is not CPU/GStreamer-accessible.
 	if( !mBufferYUV.Alloc(YUVBufferCount, i420Size, RingBuffer::ZeroCopy) )
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- failed to allocate buffers (%zu bytes each)\n", i420Size);
+		PROBE("gstEncoder -- failed to allocate buffers (%zu bytes each)", i420Size);
 		enc_success = false;
 		render_end();
 	}
@@ -818,7 +1062,7 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 	// is, skip this frame rather than corrupt an in-flight buffer.
 	if( mBufferBusy[yuvSlot].load() )
 	{		
-		LogDebug(LOG_GSTREAMER "gstEncoder -- all YUV push buffers in flight, skipping frame %zu\n", mOptions.frameCount);
+		PROBE("gstEncoder -- all YUV push buffers in flight, skipping frame %zu", mOptions.frameCount);
 		enc_success = true;
 		render_end();
 	}
@@ -855,12 +1099,12 @@ bool gstEncoder::Render( void* image, uint32_t width, uint32_t height, imageForm
 
 	if( !convert_ok ) 
 	{
-		LogError(LOG_GSTREAMER "gstEncoder::Render() -- unsupported image format (%s)\n", imageFormatToStr(format));
-		LogError(LOG_GSTREAMER "                        supported formats are:\n");
-		LogError(LOG_GSTREAMER "                            * rgb8\n");
-		LogError(LOG_GSTREAMER "                            * rgba8\n");
-		LogError(LOG_GSTREAMER "                            * rgb32f\n");
-		LogError(LOG_GSTREAMER "                            * rgba32f\n");
+		PROBE("gstEncoder::Render() -- unsupported image format (%s)", imageFormatToStr(format));
+		PROBE("                        supported formats are:");
+		PROBE("                            * rgb8");
+		PROBE("                            * rgba8");
+		PROBE("                            * rgb32f");
+		PROBE("                            * rgba32f");
 
 		enc_success = false;
 		render_end();
@@ -889,13 +1133,13 @@ bool gstEncoder::Open()
 		return true;
 
 	// transition pipline to STATE_PLAYING
-	LogInfo(LOG_GSTREAMER "gstEncoder -- starting pipeline, transitioning to GST_STATE_PLAYING\n");
+	PROBE("gstEncoder -- starting pipeline, transitioning to GST_STATE_PLAYING");
 
 	const GstStateChangeReturn result = gst_element_set_state(mPipeline, GST_STATE_PLAYING);
 
 	if( result == GST_STATE_CHANGE_ASYNC )
 	{
-		LogDebug(LOG_GSTREAMER "gstEncoder -- queued state to GST_STATE_PLAYING => GST_STATE_CHANGE_ASYNC\n");
+		PROBE("gstEncoder -- queued state to GST_STATE_PLAYING => GST_STATE_CHANGE_ASYNC");
 		
 #if 0
 		GstMessage* asyncMsg = gst_bus_timed_pop_filtered(mBus, 5 * GST_SECOND, 
@@ -907,12 +1151,12 @@ bool gstEncoder::Open()
 			gst_message_unref(asyncMsg);
 		}
 		else
-			printf(LOG_GSTREAMER "gstEncoder -- NULL message after transitioning pipeline to PLAYING...\n");
+			PROBE("gstEncoder -- NULL message after transitioning pipeline to PLAYING...");
 #endif
 	}
 	else if( result != GST_STATE_CHANGE_SUCCESS )
 	{
-		LogError(LOG_GSTREAMER "gstEncoder -- failed to set pipeline state to PLAYING (error %u)\n", result);
+		PROBE("gstEncoder -- failed to set pipeline state to PLAYING (error %u)", result);
 		return false;
 	}
 
@@ -934,26 +1178,26 @@ void gstEncoder::Close()
 	// send EOS
 	mNeedData = false;
 	
-	LogInfo(LOG_GSTREAMER "gstEncoder -- shutting down pipeline, sending EOS\n");
+	PROBE("gstEncoder -- shutting down pipeline, sending EOS");
 	GstFlowReturn eos_result = gst_app_src_end_of_stream(GST_APP_SRC(mAppSrc));
 
 	if( eos_result != 0 )
-		LogError(LOG_GSTREAMER "gstEncoder -- failed sending appsrc EOS (result %u)\n", eos_result);
+		PROBE("gstEncoder -- failed sending appsrc EOS (result %u)", eos_result);
 
 	sleep(1);
 
 	// stop pipeline
-	LogInfo(LOG_GSTREAMER "gstEncoder -- transitioning pipeline to GST_STATE_NULL\n");
+	PROBE("gstEncoder -- transitioning pipeline to GST_STATE_NULL");
 
 	const GstStateChangeReturn result = gst_element_set_state(mPipeline, GST_STATE_NULL);
 
 	if( result != GST_STATE_CHANGE_SUCCESS )
-		LogError(LOG_GSTREAMER "gstEncoder -- failed to set pipeline state to NULL (error %u)\n", result);
+		PROBE("gstEncoder -- failed to set pipeline state to NULL (error %u)", result);
 
 	sleep(1);
 	checkMsgBus();	
 	mStreaming = false;
-	LogInfo(LOG_GSTREAMER "gstEncoder -- pipeline stopped\n");
+	PROBE("gstEncoder -- pipeline stopped");
 }
 
 
