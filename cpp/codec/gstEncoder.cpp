@@ -394,10 +394,9 @@ bool gstEncoder::buildLaunchStr()
 
 	if( isDesktopNvenc )
 	{
-		// desktop NVENC (nvcodec): bitrate is in kbit/sec (like x264enc). Only set bitrate and rely
-		// on element defaults for everything else, so the pipeline launches regardless of nvcodec
-		// plugin version (preset/rc-mode/zerolatency property names vary across versions).
+		// bitrate is in kbit/sec (like x264enc). Presets p1~7, tune and spatial-aq need nvcodec 1.22+.
 		ss << "bitrate=" << mOptions.bitRate / 1000 << " ";
+		ss << "preset=p5 tune=low-latency spatial-aq=true aq-strength=8 zero-reorder-delay=true ";
 	}
 	else if( mOptions.codecType == videoOptions::CODEC_CPU )
 	{
@@ -451,8 +450,10 @@ bool gstEncoder::buildLaunchStr()
 	}
 
 	if( mOptions.codec == videoOptions::CODEC_H264 ) {
+#ifdef __aarch64__
 	    ss << "! video/x-h264,profile=constrained-baseline ! ";
-#ifndef __aarch64__
+#else
+	    ss << "! video/x-h264,profile=main ! ";
 	    ss<<" h264parse config-interval=1 ! ";
 #endif
 	}
