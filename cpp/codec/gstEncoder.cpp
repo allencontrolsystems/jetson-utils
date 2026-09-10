@@ -496,9 +496,11 @@ static bool gst_encoder_validate_simulcast( const videoOptions& options, const U
 //   funnel name=f ! udpsink ...
 //
 // all layers are interleaved onto the single UDP destination, and receivers tell
-// them apart by SSRC.  note that plain udpsink carries no RTCP, so receivers cannot
-// request keyframes (PLI/FIR) -- stream recovery relies entirely on the periodic
-// IDR interval (videoOptions::maxIFrameInterval).
+// them apart by SSRC.  each layer's rtpsession emits RTCP Sender Reports muxed onto
+// the same flow (the receiver must use rtcp-mux) -- mediasoup needs an SR per layer
+// before it will switch consumers between layers.  the sender still RECEIVES no
+// RTCP, so keyframe requests (PLI/FIR) never reach it and stream recovery relies
+// entirely on the periodic IDR interval (videoOptions::maxIFrameInterval).
 static bool gst_encoder_build_simulcast( std::ostringstream& ss, videoOptions& options, const URI& uri, const char* encoder )
 {
 	if( !gst_encoder_validate_simulcast(options, uri) )
@@ -561,7 +563,15 @@ static bool gst_encoder_build_simulcast( std::ostringstream& ss, videoOptions& o
 		                  : (options.payload_type != 0 ? options.payload_type : 96);
 
 		ss << "rtph264pay name=pay_l" << i << " config-interval=1 aggregate-mode=1 mtu=" << options.mtu;
-		ss << " pt=" << pt << " ssrc=" << ssrc << " ! f. ";
+		ss << " pt=" << pt << " ssrc=" << ssrc;
+
+		// run each layer through its own rtpsession so it emits RTCP Sender Reports,
+		// muxed onto the same UDP flow as the RTP (the receiving transport must use
+		// rtcp-mux).  mediasoup requires an SR on a simulcast layer before it will
+		// switch a consumer onto it (SimulcastConsumer::CanSwitchToSpatialLayer).
+		ss << " ! rs" << i << ".send_rtp_sink rtpsession name=rs" << i << " ";
+		ss << "rs" << i << ".send_rtp_src ! f. ";
+		ss << "rs" << i << ".send_rtcp_src ! f. ";
 	}
 
 	ss << "funnel name=f ! ";

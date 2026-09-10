@@ -222,9 +222,12 @@ public:
 	 * layer is set, its fields simply override bitRate/ssrc/payload_type and the
 	 * output resolution.  When empty (the default), simulcast is disabled.
 	 *
-	 * @note the plain UDP output carries no RTCP, so receivers cannot request
-	 *       keyframes (PLI/FIR) -- stream recovery relies entirely on the periodic
-	 *       IDR interval configured by videoOptions::maxIFrameInterval.
+	 * @note each layer emits RTCP Sender Reports muxed onto the RTP flow (the
+	 *       receiving transport must enable rtcp-mux) -- these are required for
+	 *       receivers like mediasoup to switch consumers between layers.  The
+	 *       sender does not RECEIVE any RTCP, however, so keyframe requests
+	 *       (PLI/FIR) never reach it and stream recovery relies entirely on the
+	 *       periodic IDR interval configured by videoOptions::maxIFrameInterval.
 	 */
 	std::vector<SimulcastLayer> layers;
 
