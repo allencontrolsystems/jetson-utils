@@ -439,7 +439,7 @@ bool gstEncoder::buildLaunchStr()
 				mOptions.maxIFrameInterval = 30;
 			}
 			#ifdef __aarch64__
-			ss << "iframeinterval=" << std::to_string(mOptions.maxIFrameInterval) << " insert-vui=1 ";
+			ss << "iframeinterval=" << std::to_string(mOptions.maxIFrameInterval) << " insert-vui=1 num-B-Frames=0 copy-timestamp=true ";
 			#else
 			if( isDesktopNvenc )
 				ss << "b-frames=0 gop-size=" << std::to_string(mOptions.maxIFrameInterval) << " ";  // nvcodec: b-frames/gop-size, no key-int-max/insert-vui
