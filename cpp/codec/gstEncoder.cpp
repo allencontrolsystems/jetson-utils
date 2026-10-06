@@ -947,17 +947,29 @@ void gstEncoder::Close()
 	if( eos_result != 0 )
 		LogError(LOG_GSTREAMER "gstEncoder -- failed sending appsrc EOS (result %u)\n", eos_result);
 
-	sleep(1);
+	// wait for the EOS to come out of the pipeline (or an error) rather than a fixed second; same 1 s cap
+	GstMessage* eos_msg = mBus != NULL ? gst_bus_timed_pop_filtered(mBus, GST_SECOND, (GstMessageType)(GST_MESSAGE_EOS | GST_MESSAGE_ERROR)) : NULL;
+
+	if( eos_msg != NULL )
+	{
+		gst_message_print(mBus, eos_msg, this);
+		gst_message_unref(eos_msg);
+	}
+	else
+	{
+		LogWarning(LOG_GSTREAMER "gstEncoder -- no EOS from the pipeline within 1 second\n");
+	}
 
 	// stop pipeline
 	LogInfo(LOG_GSTREAMER "gstEncoder -- transitioning pipeline to GST_STATE_NULL\n");
 
 	const GstStateChangeReturn result = gst_element_set_state(mPipeline, GST_STATE_NULL);
 
-	if( result != GST_STATE_CHANGE_SUCCESS )
+	if( result == GST_STATE_CHANGE_ASYNC )
+		gst_element_get_state(mPipeline, NULL, NULL, GST_SECOND);
+	else if( result != GST_STATE_CHANGE_SUCCESS )
 		LogError(LOG_GSTREAMER "gstEncoder -- failed to set pipeline state to NULL (error %u)\n", result);
 
-	sleep(1);
 	checkMsgBus();	
 	mStreaming = false;
 	LogInfo(LOG_GSTREAMER "gstEncoder -- pipeline stopped\n");
