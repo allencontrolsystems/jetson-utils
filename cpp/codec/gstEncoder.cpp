@@ -75,6 +75,7 @@ gstEncoder::gstEncoder( const videoOptions& options ) : videoOutput(options)
 	mBus          = NULL;
 	mBufferCaps   = NULL;
 	mPipeline     = NULL;
+	mRtcpSocket   = NULL;
 	mRTSPServer   = NULL;
 	mWebRTCServer = NULL;
 	mNeedData     = false;
@@ -129,6 +130,12 @@ void gstEncoder::destroyPipeline()
 		gst_element_set_state(mPipeline, GST_STATE_NULL);
 		gst_object_unref(mPipeline);
 		mPipeline = NULL;
+	}
+
+	if( mRtcpSocket != NULL )
+	{
+		g_object_unref(mRtcpSocket);
+		mRtcpSocket = NULL;
 	}
 }
 
@@ -233,10 +240,51 @@ bool gstEncoder::initPipeline()
 	
 	mAppSrc = appsrcElement;
 
+	if( !initRtcpSocket() )
+		return false;
+
 	g_signal_connect(appsrcElement, "need-data", G_CALLBACK(onNeedData), this);
 	g_signal_connect(appsrcElement, "enough-data", G_CALLBACK(onEnoughData), this);
 	
 	return true;
+}
+
+
+// initRtcpSocket
+bool gstEncoder::initRtcpSocket()
+{
+	GstElement* rtcpsrc = gst_bin_get_by_name(GST_BIN(mPipeline), "rtcpsrc");
+	GstElement* rtcpsink = gst_bin_get_by_name(GST_BIN(mPipeline), "rtcpsink");
+
+	if( !rtcpsrc || !rtcpsink )
+	{
+		if( rtcpsrc )
+			gst_object_unref(rtcpsrc);
+		if( rtcpsink )
+			gst_object_unref(rtcpsink);
+		return true;
+	}
+
+	bool success = false;
+
+	if( gst_element_set_state(rtcpsrc, GST_STATE_READY) == GST_STATE_CHANGE_SUCCESS )
+	{
+		g_object_get(rtcpsrc, "used-socket", &mRtcpSocket, NULL);
+
+		if( mRtcpSocket != NULL )
+		{
+			g_object_set(rtcpsrc, "socket", mRtcpSocket, NULL);
+			g_object_set(rtcpsink, "socket", mRtcpSocket, NULL);
+			success = true;
+		}
+	}
+
+	if( !success )
+		LogError(LOG_GSTREAMER "gstEncoder -- failed to open RTCP socket\n");
+
+	gst_object_unref(rtcpsrc);
+	gst_object_unref(rtcpsink);
+	return success;
 }
 
 
@@ -394,10 +442,11 @@ bool gstEncoder::buildLaunchStr()
 
 	if( isDesktopNvenc )
 	{
-		// desktop NVENC (nvcodec): bitrate is in kbit/sec (like x264enc). Only set bitrate and rely
-		// on element defaults for everything else, so the pipeline launches regardless of nvcodec
-		// plugin version (preset/rc-mode/zerolatency property names vary across versions).
+		// desktop NVENC (nvcodec): bitrate is in kbit/sec (like x264enc).
 		ss << "bitrate=" << mOptions.bitRate / 1000 << " ";
+		ss << "rate-control=cbr tune=low-latency zero-reorder-delay=true spatial-aq=true ";
+		ss << "vbv-buffer-size=" << mOptions.bitRate / 1000 / 15 << " ";
+		ss << "min-force-key-unit-interval=500000000 ";
 	}
 	else if( mOptions.codecType == videoOptions::CODEC_CPU )
 	{
@@ -513,6 +562,9 @@ bool gstEncoder::buildLaunchStr()
 		
 		if( uri.protocol == "rtp" )
 		{
+			if( mOptions.rtcpPort != 0 )
+				ss << "rtpbin.send_rtp_sink_0 rtpbin name=rtpbin rtpbin.send_rtp_src_0 ! ";
+
 			ss << "udpsink host=" << uri.location << " ";
 
 			if( uri.port != 0 )
@@ -558,6 +610,13 @@ bool gstEncoder::buildLaunchStr()
 	}
 
 	ss << " sync=false";
+
+	if( uri.protocol == "rtp" && mOptions.rtcpPort != 0 )
+	{
+		ss << " rtpbin.send_rtcp_src_0 ! udpsink name=rtcpsink host=" << uri.location << " port=" << mOptions.rtcpPort;
+		ss << " sync=false async=false close-socket=false";
+		ss << " udpsrc name=rtcpsrc port=0 caps=application/x-rtcp close-socket=false ! rtpbin.recv_rtcp_sink_0";
+	}
 
 	mLaunchStr = ss.str();
 
