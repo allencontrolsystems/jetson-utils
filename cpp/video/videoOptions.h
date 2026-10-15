@@ -119,6 +119,11 @@ public:
 	uint32_t ssrc;
 
 	/**
+	 * The remote RTCP port for an rtp:// output, 0 to disable RTCP.
+	 */
+	uint16_t rtcpPort;
+
+	/**
 	 * The payload type option for the stream. 0 for default
 	 */
 	uint8_t payload_type;

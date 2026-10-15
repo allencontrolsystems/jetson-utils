@@ -137,6 +137,7 @@ protected:
 	
 	bool init();
 	bool initPipeline();
+	bool initRtcpSocket();
 	void destroyPipeline();
 	
 	void checkMsgBus();
@@ -159,6 +160,7 @@ protected:
 	GstCaps*    mBufferCaps;
 	GstElement* mAppSrc;
 	GstElement* mPipeline;
+	GObject*    mRtcpSocket;
 	bool        mNeedData;
 	
 	std::string  mCapsStr;

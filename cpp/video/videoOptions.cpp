@@ -41,6 +41,7 @@ videoOptions::videoOptions()
 	zeroCopy    = true;
 	maxIFrameInterval = 0;
 	ssrc = 0;
+	rtcpPort = 0;
 	payload_type = 0;
 	block = true;
 	rescale = false;
