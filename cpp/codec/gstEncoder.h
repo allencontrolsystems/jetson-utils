@@ -23,12 +23,11 @@
 #ifndef __GSTREAMER_ENCODER_H__
 #define __GSTREAMER_ENCODER_H__
 
-#include "gstUtility.h"
-#include "videoOutput.h"
-#include "RingBuffer.h"
-
 #include <atomic>
 
+#include "RingBuffer.h"
+#include "gstUtility.h"
+#include "videoOutput.h"
 
 // Forward declarations
 class RTSPServer;
@@ -62,23 +61,30 @@ public:
 	 * Create an encoder instance from resource URI and codec.
 	 */
 	static gstEncoder* Create( const URI& resource, videoOptions::Codec codec );
-	
+
 	/**
 	 * Destructor
 	 */
 	~gstEncoder();
-	
+
 	/**
 	 * Encode the next frame.
 	 * @see videoOutput::Render()
 	 */
 	template<typename T> bool Render( T* image, uint32_t width, uint32_t height, cudaStream_t stream=0 )		{ return Render((void**)image, width, height, imageFormatFromType<T>(), stream); }
-	
+
 	/**
 	 * Encode the next frame.
 	 * @see videoOutput::Render()
 	 */
 	virtual bool Render( void* image, uint32_t width, uint32_t height, imageFormat format, cudaStream_t stream=0 );
+
+    /**
+     *
+     * Set the frame timestamp.
+     * @see videoOutput::SetFrameTimestamp()
+     */
+    virtual void SetFrameTimestamp( double unix_time_now ) { mFrameTimestamp = unix_time_now; videoOutput::SetFrameTimestamp(unix_time_now); }
 
 	/**
 	 * Open the stream.
@@ -96,12 +102,12 @@ public:
 	 * Return the GStreamer pipeline object.
 	 */
 	inline GstPipeline* GetPipeline() const			{ return GST_PIPELINE(mPipeline); }
-	
+
 	/**
 	 * Return the WebRTC server (only used when the protocol is "webrtc://")
 	 */
 	inline WebRTCServer* GetWebRTCServer() const 	{ return mWebRTCServer; }
-	
+
 	/**
 	 * Return the interface type (gstEncoder::Type)
 	 */
@@ -132,13 +138,15 @@ public:
 	 */
 	static bool IsSupportedExtension( const char* ext );
 
+    static GstPadProbeReturn sei_probe(GstPad*, GstPadProbeInfo* info, gpointer user_data);
+
 protected:
 	gstEncoder( const videoOptions& options );
-	
+
 	bool init();
 	bool initPipeline();
 	void destroyPipeline();
-	
+
 	void checkMsgBus();
 	bool buildCapsStr();
 	bool buildLaunchStr();
@@ -160,7 +168,7 @@ protected:
 	GstElement* mAppSrc;
 	GstElement* mPipeline;
 	bool        mNeedData;
-	
+
 	std::string  mCapsStr;
 	std::string  mLaunchStr;
 
@@ -173,6 +181,9 @@ protected:
 
 	RTSPServer*   mRTSPServer;
 	WebRTCServer* mWebRTCServer;
+
+    uint64_t mFrameTimestamp = 0;
+    GstCaps* sTsCaps = nullptr;        // label for the reference timestamp
 };
 
 /**
