@@ -421,8 +421,12 @@ bool gstEncoder::buildLaunchStr()
 		if( mOptions.deviceType == videoOptions::DEVICE_IP )
 		{
 			if( mOptions.codecType == videoOptions::CODEC_V4L2 )
+			{
+				// VBV of 45ms at the bitrate (450000 at 10Mbit/s); a fixed 450000 failed NVENC's HRD check at 20Mbit/s.
+				const uint64_t vbvSize = static_cast<uint64_t>(mOptions.bitRate) * 45 / 1000;
                 ss << "insert-sps-pps=1 insert-vui=1 idrinterval=" << mOptions.maxIFrameInterval
-                   << " peak-bitrate=30000000 control-rate=1 vbv-size=450000 ";
+                   << " peak-bitrate=30000000 control-rate=1 vbv-size=" << vbvSize << " ";
+			}
 			else if( mOptions.codecType == videoOptions::CODEC_OMX )
 				ss << "insert-sps-pps=1 insert-vui=1 ";
 		}
